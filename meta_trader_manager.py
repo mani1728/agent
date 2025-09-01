@@ -13,6 +13,9 @@ class Mt5_Manager:
         self.version = None  # برای ذخیره نسخه MT5
         self.account_info_dict = None  # برای ذخیره اطلاعات حساب
         self.symbols_count = None  # برای ذخیره تعداد نمادها
+        self.all_symbols = None  # برای ذخیره همه نمادها
+        self.filtered_symbols = None  # برای ذخیره نمادهای فیلترشده
+        self.group_symbols = None  # برای ذخیره نمادهای گروه خاص
 
     def initialize(self, path=None, login=None, password=None, server=None, timeout=60000, portable=False):
         # متد برای اتصال به MetaTrader 5 با پارامترهای داده‌شده
@@ -90,3 +93,45 @@ class Mt5_Manager:
         else:
             print("Symbols not found")
         return self.symbols_count
+
+    def symbols_get(self, group="*", login=None, password=None, server=None, timeout=60000):
+        # متد برای گرفتن لیست نمادهای مالی
+        login = login or self.default_login
+        password = password or self.default_password
+        server = server or self.default_server
+        # اطمینان از اتصال
+        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
+        if not success:
+            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
+            return None
+        # گرفتن همه نمادها
+        self.all_symbols = mt5.symbols_get()
+        if not self.all_symbols:
+            print("No symbols found")
+            return None
+        print(f"Symbols: {len(self.all_symbols)}")
+        # چاپ 5 نماد اول
+        count = 0
+        for s in self.all_symbols:
+            count += 1
+            print(f"{count}. {s.name}")
+            if count == 5:
+                break
+        print()
+        # گرفتن نمادهای حاوی RU
+        self.filtered_symbols = mt5.symbols_get("*RU*")
+        print(f"len(*RU*): {len(self.filtered_symbols)}")
+        for s in self.filtered_symbols:
+            print(s.name)
+        print()
+        # گرفتن نمادهای گروه خاص (بدون USD, EUR, JPY, GBP)
+        self.group_symbols = mt5.symbols_get(group=group)
+        print(f"len({group}): {len(self.group_symbols)}")
+        for s in self.group_symbols:
+            print(f"{s.name} : {s}")
+        # برگرداندن دیکشنری حاوی همه نتایج
+        return {
+            "all_symbols": [s.name for s in self.all_symbols],
+            "filtered_symbols": [s.name for s in self.filtered_symbols],
+            "group_symbols": [s.name for s in self.group_symbols]
+        }
