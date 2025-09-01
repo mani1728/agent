@@ -1,25 +1,11 @@
 # ساده‌ترین کد برای گوش دادن به Kafka و فراخوانی متدهای کلاس
 from confluent_kafka import Consumer, KafkaException
 import json
-import MetaTrader5 as mt5
+from meta_trader_manager import Mt5_Manager
 
 # تنظیمات استاتیک
 KAFKA_SERVERS = "192.168.1.254:9092"  # آدرس سرور Kafka
 TOPIC = "agent-send"  # تاپیکی که گوش می‌دهیم
-
-# کلاس نمونه برای کار با MetaTrader 5
-class Mt5_Manager:
-    def __init__(self):
-        # هیچ پارامتری در __init__ نمی‌گیریم، چون از پیام Kafka میاد
-        pass
-
-    def initialize(self, path, login, password, server):
-        # متد برای اتصال به MetaTrader 5 با پارامترهای داده‌شده
-        print(f"mt5_init called: Connecting to MetaTrader 5 with path={path}, login={login}, server={server}")
-        if mt5.initialize(path=path, login=login, password=password, server=server):
-            print("MT5 initialized successfully")
-        else:
-            print("MT5 initialization failed")
 
 # مپ کردن نام کلاس به کلاس واقعی
 CLASS_MAP = {
@@ -104,7 +90,7 @@ class KafkaListener:
             # پردازش هر دستور در لیست
             for command in value_list:
                 method_name = command.get("method")
-                params = command.get("params", {})
+                params = command.get("params", {})  # پارامترها می‌تونن خالی باشن
                 # چک کردن وجود متد
                 if not method_name or not hasattr(instance, method_name):
                     print(f"Method '{method_name}' not found in class '{class_name}'")
@@ -113,7 +99,13 @@ class KafkaListener:
                 # فراخوانی متد با پارامترها
                 try:
                     print(f"Calling {class_name}.{method_name} with params: {params}")
-                    method(**params)  # ارسال پارامترها به صورت keyword arguments
+                    result = method(**params)  # ذخیره نتیجه متد
+                    print(f"Result of {method_name}: {result}")
+                    # اگر متد login باشه، terminal_info و version رو جدا چاپ کن
+                    if method_name == "login":
+                        success, terminal_info, version = result
+                        print(f"Stored terminal_info: {terminal_info}")
+                        print(f"Stored version: {version}")
                 except TypeError as e:
                     print(f"Error calling {method_name}: Invalid parameters - {e}")
         except json.JSONDecodeError:
