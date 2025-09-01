@@ -1,5 +1,6 @@
 # کلاس برای کار با MetaTrader 5
 import MetaTrader5 as mt5
+import pandas as pd
 
 class Mt5_Manager:
     def __init__(self):
@@ -10,10 +11,10 @@ class Mt5_Manager:
         self.default_server = "MetaQuotes-Demo"
         self.terminal_info = None  # برای ذخیره اطلاعات ترمینال
         self.version = None  # برای ذخیره نسخه MT5
+        self.account_info_dict = None  # برای ذخیره اطلاعات حساب
 
     def initialize(self, path=None, login=None, password=None, server=None, timeout=60000, portable=False):
         # متد برای اتصال به MetaTrader 5 با پارامترهای داده‌شده
-        # استفاده از مقادیر پیش‌فرض اگر پارامترها None باشن
         path = path or self.default_path
         login = login or self.default_login
         password = password or self.default_password
@@ -27,10 +28,8 @@ class Mt5_Manager:
         # ذخیره اطلاعات ترمینال و نسخه
         self.terminal_info = mt5.terminal_info()
         self.version = mt5.version()
-        self.last_error = mt5.last_error()
         print(f"Terminal info: {self.terminal_info}")
         print(f"MT5 version: {self.version}")
-        print(f"MT5 last error: {self.last_error}")
         return True
 
     def login(self, login=None, password=None, server=None, timeout=60000):
@@ -42,3 +41,32 @@ class Mt5_Manager:
         success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
         # برگرداندن نتیجه و اطلاعات ترمینال/نسخه
         return success, self.terminal_info, self.version
+
+    def account_info(self, login=None, password=None, server=None, timeout=60000):
+        # متد برای گرفتن اطلاعات حساب
+        login = login or self.default_login
+        password = password or self.default_password
+        server = server or self.default_server
+        # اطمینان از اتصال
+        success, terminal_info, version = self.login(login=login, password=password, server=server, timeout=timeout)
+        if not success:
+            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
+            return None
+        # گرفتن اطلاعات حساب
+        account_info = mt5.account_info()
+        if account_info is None:
+            print(f"Failed to get account info for login={login}, error code = {mt5.last_error()}")
+            return None
+        # ذخیره اطلاعات حساب به صورت دیکشنری
+        self.account_info_dict = account_info._asdict()
+        # چاپ اطلاعات
+        print(f"Account info: {account_info}")
+        print("Show account_info()._asdict():")
+        for prop in self.account_info_dict:
+            print(f"  {prop}={self.account_info_dict[prop]}")
+        # تبدیل به DataFrame
+        df = pd.DataFrame(list(self.account_info_dict.items()), columns=['property', 'value'])
+        print("account_info() as dataframe:")
+        print(df)
+        # برگرداندن اطلاعات حساب
+        return self.account_info_dict
