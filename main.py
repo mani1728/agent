@@ -94,6 +94,7 @@ class KafkaListener:
                 # چک کردن وجود متد
                 if not method_name or not hasattr(instance, method_name):
                     print(f"Method '{method_name}' not found in class '{class_name}'")
+                    print(f"Available methods: {dir(instance)}")
                     continue
                 method = getattr(instance, method_name)
                 # فراخوانی متد با پارامترها
