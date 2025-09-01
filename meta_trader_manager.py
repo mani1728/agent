@@ -12,6 +12,7 @@ class Mt5_Manager:
         self.terminal_info = None  # برای ذخیره اطلاعات ترمینال
         self.version = None  # برای ذخیره نسخه MT5
         self.account_info_dict = None  # برای ذخیره اطلاعات حساب
+        self.symbols_count = None  # برای ذخیره تعداد نمادها
 
     def initialize(self, path=None, login=None, password=None, server=None, timeout=60000, portable=False):
         # متد برای اتصال به MetaTrader 5 با پارامترهای داده‌شده
@@ -70,3 +71,22 @@ class Mt5_Manager:
         print(df)
         # برگرداندن اطلاعات حساب
         return self.account_info_dict
+
+    def symbols_total(self, login=None, password=None, server=None, timeout=60000):
+        # متد برای گرفتن تعداد نمادهای مالی
+        login = login or self.default_login
+        password = password or self.default_password
+        server = server or self.default_server
+        # اطمینان از اتصال
+        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
+        if not success:
+            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
+            return None
+        # گرفتن تعداد نمادها
+        symbols = mt5.symbols_total()
+        self.symbols_count = symbols  # ذخیره تعداد نمادها
+        if symbols > 0:
+            print(f"Total symbols = {symbols}")
+        else:
+            print("Symbols not found")
+        return self.symbols_count
