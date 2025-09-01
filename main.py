@@ -1,9 +1,30 @@
-# ساده‌ترین کد برای گوش دادن به Kafka topic با confluent_kafka
+# ساده‌ترین کد برای گوش دادن به Kafka و فراخوانی متدهای کلاس
 from confluent_kafka import Consumer, KafkaException
+import json
+import MetaTrader5 as mt5
 
 # تنظیمات استاتیک
 KAFKA_SERVERS = "192.168.1.254:9092"  # آدرس سرور Kafka
 TOPIC = "agent-send"  # تاپیکی که گوش می‌دهیم
+
+# کلاس نمونه برای کار با MetaTrader 5
+class Mt5_Manager:
+    def __init__(self):
+        # هیچ پارامتری در __init__ نمی‌گیریم، چون از پیام Kafka میاد
+        pass
+
+    def initialize(self, path, login, password, server):
+        # متد برای اتصال به MetaTrader 5 با پارامترهای داده‌شده
+        print(f"mt5_init called: Connecting to MetaTrader 5 with path={path}, login={login}, server={server}")
+        if mt5.initialize(path=path, login=login, password=password, server=server):
+            print("MT5 initialized successfully")
+        else:
+            print("MT5 initialization failed")
+
+# مپ کردن نام کلاس به کلاس واقعی
+CLASS_MAP = {
+    "Mt5_Manager": Mt5_Manager
+}
 
 # کلاس اصلی برای گوش دادن به پیام‌ها
 class KafkaListener:
@@ -41,15 +62,64 @@ class KafkaListener:
                 if msg.error():
                     print(f"Error: {msg.error()}")  # نمایش خطا
                     continue
-                value = msg.value().decode('utf-8')  # تبدیل پیام به string
-                print(f"Received message: {value}")  # چاپ پیام
+                # دریافت value و key
+                value = msg.value().decode('utf-8') if msg.value() else "No value"
+                key = msg.key().decode('utf-8') if msg.key() else "No key"
+                # پاکسازی key از نقل‌قول‌های تک یا دوتایی
+                cleaned_key = key.strip('"').strip("'")
+                # چاپ برای دیباگ
+                print(f"Received message: {value}")
+                print(f"Raw Key: {key}. Key.type: {type(key)}")
+                print(f"Cleaned Key: {cleaned_key}. Cleaned Key.type: {type(cleaned_key)}")
+                # پردازش پیام
+                self.process_message(cleaned_key, value)
         except KeyboardInterrupt:
             print("Stopping listener...")  # توقف با Ctrl+C
             self.running = False
+        except Exception as e:
+            print(f"Error processing message: {e}")
         finally:
             if self.consumer:
                 self.consumer.close()  # بستن Consumer
                 print("Kafka consumer closed.")
+
+    def process_message(self, class_name, value):
+        # پردازش پیام: پیدا کردن کلاس و فراخوانی متدها
+        try:
+            # پاکسازی value: تبدیل نقل‌قول‌های تک به دوتایی
+            cleaned_value = value.replace("'", '"')
+            print(f"Cleaned value: {cleaned_value}")
+            # پارس value به لیست دستورات
+            value_list = json.loads(cleaned_value)
+            # چک کردن اینکه value_list یک لیست است
+            if not isinstance(value_list, list):
+                value_list = [value_list]  # تبدیل به لیست تک‌عنصری
+            # پیدا کردن کلاس از CLASS_MAP
+            if class_name not in CLASS_MAP:
+                print(f"Class '{class_name}' not found in CLASS_MAP")
+                return
+            cls = CLASS_MAP[class_name]
+            # ایجاد نمونه از کلاس
+            instance = cls()
+            # پردازش هر دستور در لیست
+            for command in value_list:
+                method_name = command.get("method")
+                params = command.get("params", {})
+                # چک کردن وجود متد
+                if not method_name or not hasattr(instance, method_name):
+                    print(f"Method '{method_name}' not found in class '{class_name}'")
+                    continue
+                method = getattr(instance, method_name)
+                # فراخوانی متد با پارامترها
+                try:
+                    print(f"Calling {class_name}.{method_name} with params: {params}")
+                    method(**params)  # ارسال پارامترها به صورت keyword arguments
+                except TypeError as e:
+                    print(f"Error calling {method_name}: Invalid parameters - {e}")
+        except json.JSONDecodeError:
+            print(f"Invalid JSON in value: {cleaned_value}")
+        except Exception as e:
+            print(f"Error processing message: {e}")
 
 # اجرای برنامه
 if __name__ == "__main__":
