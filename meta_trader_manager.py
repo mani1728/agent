@@ -1,64 +1,80 @@
-#C:\Users\Administrator\Desktop\agent_low\agent\meta_trader_manager.py
-# کلاس برای کار با MetaTrader 5
-import MetaTrader5 as mt5
-import pandas as pd
-import time
-import pytz
-import datetime
+# C:\Users\Administrator\Desktop\agent_low\agent\meta_trader_manager.py
+# این فایل شامل کلاسی برای مدیریت تمام تعاملات با پلتفرم MetaTrader 5 است.
+
+# --- وارد کردن کتابخانه‌های مورد نیاز ---
+import MetaTrader5 as mt5  # کتابخانه اصلی برای اتصال و کار با متاتریدر 5
+import pandas as pd  # برای کار با داده‌ها در قالب DataFrame که خوانایی و تحلیل را ساده‌تر می‌کند
+import time  # برای ایجاد تاخیر در برنامه (مثلاً هنگام انتظار برای به‌روزرسانی قیمت)
+import pytz  # برای کار با مناطق زمانی (Timezones)، که برای درخواست داده‌های تاریخی ضروری است
+import datetime  # برای کار با آبجکت‌های تاریخ و زمان
 
 
+# تعریف کلاس اصلی برای مدیریت متاتریدر 5
 class Mt5_Manager:
+    # متد سازنده (Constructor) که هنگام ایجاد یک نمونه جدید از این کلاس، به صورت خودکار اجرا می‌شود
     def __init__(self):
-        # مقادیر پیش‌فرض برای استفاده در صورت عدم ارسال پارامتر
-        self.default_path = r"C:\Program Files\MetaTrader 5\terminal64.exe"
-        self.default_login = 96033328
-        self.default_password = "D_Hs3tGc"
-        self.default_server = "MetaQuotes-Demo"
-        self.terminal_info = None  # برای ذخیره اطلاعات ترمینال
-        self.version = None  # برای ذخیره نسخه MT5
-        self.account_info_dict = None  # برای ذخیره اطلاعات حساب
-        self.symbols_count = None  # برای ذخیره تعداد نمادها
-        self.all_symbols = None  # برای ذخیره همه نمادها
-        self.filtered_symbols = None  # برای ذخیره نمادهای فیلترشده
-        self.group_symbols = None  # برای ذخیره نمادهای گروه خاص
-        self.symbol_info_dict = None  # برای ذخیره اطلاعات نماد
-        self.symbol_tick_dict = None  # برای ذخیره اطلاعات تیک
-        self.market_book_data = None  # برای ذخیره داده‌های عمق بازار
+        # --- مقادیر پیش‌فرض ---
+        # این مقادیر در صورتی استفاده می‌شوند که کاربر هنگام فراخوانی متدها، مقادیر دلخواه خود را ارسال نکند.
+        self.default_path = r"C:\Program Files\MetaTrader 5\terminal64.exe"  # مسیر پیش‌فرض فایل اجرایی ترمینال متاتریدر 5
+        self.default_login = 96033328  # شماره حساب پیش‌فرض
+        self.default_password = "D_Hs3tGc"  # رمز عبور پیش‌فرض
+        self.default_server = "MetaQuotes-Demo"  # نام سرور پیش‌فرض
 
+        # --- متغیرهای وضعیت (State) ---
+        # این متغیرها برای ذخیره اطلاعاتی که از متاتریدر دریافت می‌شود، استفاده می‌شوند تا نیازی به درخواست مجدد آنها نباشد.
+        self.terminal_info = None  # برای ذخیره اطلاعات کلی ترمینال
+        self.version = None  # برای ذخیره نسخه متاتریدر 5
+        self.account_info_dict = None  # برای ذخیره اطلاعات حساب معاملاتی
+        self.symbols_count = None  # برای ذخیره تعداد کل نمادهای موجود در سرور
+        self.all_symbols = None  # برای ذخیره لیست تمام نمادها
+        self.filtered_symbols = None  # برای ذخیره لیست نمادهای فیلتر شده
+        self.group_symbols = None  # برای ذخیره لیست نمادهای یک گروه خاص
+        self.symbol_info_dict = None  # برای ذخیره اطلاعات یک نماد خاص
+        self.symbol_tick_dict = None  # برای ذخیره آخرین تیک قیمت یک نماد
+        self.market_book_data = None  # برای ذخیره داده‌های عمق بازار (Market Depth)
+
+    # متد یکپارچه برای مدیریت تمام عملیات مربوط به اتصال
     def manage_connection(self, action, path=None, login=None, password=None, server=None, timeout=60000,
                           portable=False):
         """
         متد برای مدیریت اتصال به MetaTrader 5 (اتصال، لاگین، اطلاعات ترمینال، نسخه، اطلاعات حساب و قطع اتصال)
         :param action: نوع عملیات ("initialize", "login", "terminal_info", "version", "account_info", "shutdown")
         """
-        # اطمینان از مقدار معتبر action
+        # بررسی اینکه آیا مقدار 'action' ارسال شده، یکی از مقادیر مجاز است یا خیر
         if action not in ["initialize", "login", "terminal_info", "version", "account_info", "shutdown"]:
             print(
                 f"Invalid action: {action}. Must be one of 'initialize', 'login', 'terminal_info', 'version', 'account_info', 'shutdown'.")
             return None
 
-        # استفاده از مقادیر پیش‌فرض
+        # اگر پارامترهای ورودی (مانند path, login و ...) ارسال نشده باشند، از مقادیر پیش‌فرض استفاده کن
         path = path or self.default_path
         login = login or self.default_login
         password = password or self.default_password
         server = server or self.default_server
 
+        # --- بخش پردازش دستورات بر اساس پارامتر 'action' ---
+
         if action == "initialize":
-            # چک کردن اینکه آیا ترمینال قبلاً متصل است
+            # بررسی اینکه آیا از قبل به ترمینال متصل هستیم یا نه
             if mt5.terminal_info() and mt5.terminal_info().connected:
                 print("MT5 already connected, skipping initialize")
+                # اگر متصل بودیم، اطلاعات ترمینال و نسخه را در متغیرهای کلاس ذخیره می‌کنیم
                 self.terminal_info = mt5.terminal_info()
                 self.version = mt5.version()
-                return True
-            # اتصال به MetaTrader 5
+                return True  # بازگرداندن مقدار True به نشانه موفقیت
+
+            # اگر متصل نبودیم، اقدام به برقراری اتصال می‌کنیم
             print(f"mt5_init called: Connecting to MetaTrader 5 with path={path}, login={login}, server={server}")
+            # فراخوانی تابع اصلی اتصال در کتابخانه متاتریدر 5
             if not mt5.initialize(path=path, login=login, password=password, server=server, timeout=timeout,
                                   portable=portable):
+                # اگر اتصال ناموفق بود، کد خطا را چاپ کن
                 print(f"initialize() failed, error code = {mt5.last_error()}")
                 print("MT5 initialization failed")
-                return False
+                return False  # بازگرداندن مقدار False به نشانه شکست
+
             print("MT5 initialized successfully")
-            # ذخیره اطلاعات ترمینال و نسخه
+            # پس از اتصال موفق، اطلاعات ترمینال و نسخه را دریافت و ذخیره کن
             self.terminal_info = mt5.terminal_info()
             self.version = mt5.version()
             print(f"Terminal info: {self.terminal_info}")
@@ -66,9 +82,10 @@ class Mt5_Manager:
             return True
 
         elif action == "login":
-            # لاگین با استفاده از initialize
+            # برای لاگین کردن، کافی است همان عملیات 'initialize' را با اطلاعات جدید فراخوانی کنیم
             success = self.manage_connection(action="initialize", path=path, login=login, password=password,
                                              server=server, timeout=timeout, portable=portable)
+            # خروجی شامل وضعیت موفقیت، اطلاعات ترمینال و نسخه است
             return success, self.terminal_info, self.version
 
         elif action == "terminal_info":
@@ -79,10 +96,11 @@ class Mt5_Manager:
                 return None
             self.terminal_info = terminal_info
             print(f"Terminal info: {self.terminal_info}")
+            # اطلاعات را به صورت دیکشنری برمی‌گردانیم تا کار با آن راحت‌تر باشد
             return self.terminal_info._asdict() if self.terminal_info else None
 
         elif action == "version":
-            # دریافت نسخه MT5
+            # دریافت نسخه متاتریدر
             version = mt5.version()
             if version is None:
                 print(f"Failed to get version, error code = {mt5.last_error()}")
@@ -92,67 +110,61 @@ class Mt5_Manager:
             return self.version
 
         elif action == "account_info":
-            # اطمینان از اتصال
+            # ابتدا از برقراری اتصال اطمینان حاصل می‌کنیم
             success = self.manage_connection(action="initialize", login=login, password=password, server=server,
                                              timeout=timeout)
             if not success:
                 print(
                     f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
                 return None
-            # گرفتن اطلاعات حساب
+            # دریافت اطلاعات حساب معاملاتی
             account_info = mt5.account_info()
             if account_info is None:
                 print(f"Failed to get account info for login={login}, error code = {mt5.last_error()}")
                 return None
             # ذخیره اطلاعات حساب به صورت دیکشنری
             self.account_info_dict = account_info._asdict()
-            # چاپ اطلاعات
+            # چاپ اطلاعات به صورت‌های مختلف برای نمایش
             print(f"Account info: {account_info}")
             print("Show account_info()._asdict():")
             for prop in self.account_info_dict:
                 print(f"  {prop}={self.account_info_dict[prop]}")
-            # تبدیل به DataFrame
+            # تبدیل به DataFrame برای نمایش جدولی و زیبا
             df = pd.DataFrame(list(self.account_info_dict.items()), columns=['property', 'value'])
             print("account_info() as dataframe:")
             print(df)
-            # برگرداندن اطلاعات حساب
+            # برگرداندن اطلاعات حساب به صورت دیکشنری
             return self.account_info_dict
 
         elif action == "shutdown":
-            # قطع اتصال از MetaTrader 5
+            # قطع اتصال از ترمینال متاتریدر
             mt5.shutdown()
             print("MT5 connection shut down")
+            # پس از قطع اتصال، متغیرهای وضعیت را پاک می‌کنیم
             self.terminal_info = None
             self.version = None
             self.account_info_dict = None
             return True
 
+    # متد یکپارچه برای مدیریت تمام عملیات مربوط به نمادهای معاملاتی
     def manage_symbols(self, action, symbol=None, group="*", enable=True, login=None, password=None, server=None,
                        timeout=60000):
         """
         متد برای مدیریت عملیات نمادها (تعداد، لیست، اطلاعات نماد، اطلاعات تیک، فعال/غیرفعال کردن)
-        :param action: نوع عملیات ("total", "get", "info", "tick", "select")
-        :param symbol: نماد مالی (اختیاری، پیش‌فرض None برای total/get)
-        :param group: گروه نمادها برای فیلتر کردن (پیش‌فرض "*")
-        :param enable: فعال یا غیرفعال کردن نماد در MarketWatch (پیش‌فرض True)
-        :param login: شماره حساب (اختیاری)
-        :param password: رمز عبور (اختیاری)
-        :param server: نام سرور (اختیاری)
-        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
-        :return: نتیجه عملیات (بسته به action)
         """
-        # اطمینان از مقدار معتبر action
+        # بررسی اعتبار مقدار 'action'
         if action not in ["total", "get", "info", "tick", "select"]:
             print(f"Invalid action: {action}. Must be 'total', 'get', 'info', 'tick', or 'select'.")
             return None
 
-        # استفاده از مقادیر پیش‌فرض
+        # استفاده از مقادیر پیش‌فرض در صورت نیاز
         login = login or self.default_login
         password = password or self.default_password
         server = server or self.default_server
+        # اگر عملیات نیاز به نماد داشت و کاربر نمادی ارسال نکرده بود، از EURUSD استفاده کن
         symbol = symbol or "EURUSD" if action in ["info", "tick", "select"] else None
 
-        # اطمینان از اتصال
+        # اطمینان از برقراری اتصال
         success = self.manage_connection(action="initialize", login=login, password=password, server=server,
                                          timeout=timeout)
         if not success:
@@ -160,7 +172,7 @@ class Mt5_Manager:
             return None
 
         if action == "total":
-            # گرفتن تعداد نمادها
+            # گرفتن تعداد کل نمادهای موجود در سرور
             symbols = mt5.symbols_total()
             self.symbols_count = symbols  # ذخیره تعداد نمادها
             if symbols > 0:
@@ -170,13 +182,13 @@ class Mt5_Manager:
             return self.symbols_count
 
         elif action == "get":
-            # گرفتن همه نمادها
+            # گرفتن لیست تمام نمادها
             self.all_symbols = mt5.symbols_get()
             if not self.all_symbols:
                 print("No symbols found")
                 return None
             print(f"Symbols: {len(self.all_symbols)}")
-            # چاپ 5 نماد اول
+            # چاپ 5 نماد اول برای نمونه
             count = 0
             for s in self.all_symbols:
                 count += 1
@@ -184,46 +196,50 @@ class Mt5_Manager:
                 if count == 5:
                     break
             print()
-            # گرفتن نمادهای حاوی RU
+            # گرفتن نمادهایی که در نامشان 'RU' وجود دارد (مثال فیلتر با وایلدکارد)
             self.filtered_symbols = mt5.symbols_get("*RU*")
             print(f"len(*RU*): {len(self.filtered_symbols)}")
             for s in self.filtered_symbols:
                 print(s.name)
             print()
-            # گرفتن نمادهای گروه خاص
+            # گرفتن نمادهای یک گروه خاص (مثلاً group="Forex")
             self.group_symbols = mt5.symbols_get(group=group)
             print(f"len({group}): {len(self.group_symbols)}")
             for s in self.group_symbols:
                 print(f"{s.name} : {s}")
-            # برگرداندن دیکشنری حاوی همه نتایج
+            # برگرداندن دیکشنری حاوی نام تمام نمادهای دریافت شده
             return {
                 "all_symbols": [s.name for s in self.all_symbols],
                 "filtered_symbols": [s.name for s in self.filtered_symbols],
                 "group_symbols": [s.name for s in self.group_symbols]
             }
 
+        # اگر عملیات مربوط به یک نماد خاص بود
         elif action in ["info", "tick", "select"]:
-            # چک کردن وجود نماد در سرور
+            # بررسی اینکه آیا نماد درخواستی در سرور وجود دارد یا نه
             available_symbols = mt5.symbols_get()
             if not any(s.name == symbol for s in available_symbols):
                 print(f"Symbol {symbol} not found in server")
                 print(f"Retrying with fallback symbol EURUSD")
+                # اگر وجود نداشت، از نماد پیش‌فرض EURUSD استفاده کن
                 symbol = "EURUSD"
                 if not any(s.name == symbol for s in available_symbols):
                     print(f"Fallback symbol EURUSD not found in server")
                     return None if action in ["info", "tick"] else False
 
-            # محدود کردن تعداد نمادهای فعال در MarketWatch
+            # یک منطق اختیاری برای مدیریت پنجره MarketWatch: اگر تعداد نمادهای فعال زیاد بود، آنها را پاک کن
             current_symbols = mt5.symbols_get()
-            if current_symbols and len(current_symbols) > 100:  # محدودیت اختیاری
+            if current_symbols and len(current_symbols) > 100:
                 print(f"Too many symbols in MarketWatch ({len(current_symbols)}), clearing MarketWatch")
                 for s in current_symbols:
-                    if s.name != symbol:  # نگه داشتن نماد مورد نظر
-                        mt5.symbol_select(s.name, False)  # غیرفعال کردن نمادهای دیگر
+                    # نمادهایی غیر از نماد فعلی مورد نیاز را غیرفعال کن
+                    if s.name != symbol:
+                        mt5.symbol_select(s.name, False)
 
-            # فعال کردن نماد در MarketWatch
+            # فعال کردن نماد مورد نظر در MarketWatch تا بتوان اطلاعات قیمتی آن را دریافت کرد
             selected = mt5.symbol_select(symbol, True)
             if not selected:
+                # اگر فعال‌سازی ناموفق بود، یک بار دیگر با EURUSD تلاش کن
                 print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
                 print(f"Retrying with fallback symbol EURUSD")
                 symbol = "EURUSD"
@@ -233,21 +249,20 @@ class Mt5_Manager:
                     return None if action in ["info", "tick"] else False
 
             if action == "info":
-                # گرفتن اطلاعات نماد
+                # گرفتن اطلاعات کامل و استاتیک نماد
                 symbol_info = mt5.symbol_info(symbol)
                 if symbol_info is None:
                     print(f"Failed to get symbol info for {symbol}, error code = {mt5.last_error()}")
                     return None
-                # چک کردن وضعیت بازار
+                # بررسی اینکه آیا قیمت وجود دارد (ممکن است بازار بسته باشد)
                 if symbol_info.bid == 0.0 and symbol_info.ask == 0.0:
                     print(f"No price data for {symbol}, market may be closed or data not updated")
-                    time.sleep(1)  # تاخیر 1 ثانیه
+                    time.sleep(1)  # 1 ثانیه صبر می‌کنیم و دوباره تلاش می‌کنیم
                     symbol_info = mt5.symbol_info(symbol)
                     if symbol_info is None or (symbol_info.bid == 0.0 and symbol_info.ask == 0.0):
                         print(f"Still no price data for {symbol}, skipping")
-                # ذخیره اطلاعات نماد
+                # ذخیره و چاپ اطلاعات نماد
                 self.symbol_info_dict = symbol_info._asdict()
-                # چاپ اطلاعات
                 print(f"Symbol info for {symbol}: {symbol_info}")
                 print(f"{symbol}: spread = {symbol_info.spread}, digits = {symbol_info.digits}")
                 print(f"Show symbol_info(\"{symbol}\")._asdict():")
@@ -256,21 +271,20 @@ class Mt5_Manager:
                 return self.symbol_info_dict
 
             elif action == "tick":
-                # گرفتن اطلاعات تیک
+                # گرفتن آخرین تیک قیمت (bid/ask)
                 tick_info = mt5.symbol_info_tick(symbol)
                 if tick_info is None:
                     print(f"Failed to get tick info for {symbol}, error code = {mt5.last_error()}")
                     return None
-                # چک کردن وضعیت بازار
+                # بررسی وضعیت بازار
                 if tick_info.bid == 0.0 and tick_info.ask == 0.0:
                     print(f"No tick data for {symbol}, market may be closed or data not updated")
-                    time.sleep(1)  # تاخیر 1 ثانیه
+                    time.sleep(1)
                     tick_info = mt5.symbol_info_tick(symbol)
                     if tick_info is None or (tick_info.bid == 0.0 and tick_info.ask == 0.0):
                         print(f"Still no tick data for {symbol}, skipping")
-                # ذخیره اطلاعات تیک
+                # ذخیره و چاپ اطلاعات تیک
                 self.symbol_tick_dict = tick_info._asdict()
-                # چاپ اطلاعات
                 print(f"Tick info for {symbol}: {tick_info}")
                 print(f"Show symbol_info_tick(\"{symbol}\")._asdict():")
                 for prop in self.symbol_tick_dict:
@@ -278,27 +292,25 @@ class Mt5_Manager:
                 return self.symbol_tick_dict
 
             elif action == "select":
-                # فعال یا غیرفعال کردن نماد در MarketWatch
+                # فعال (enable=True) یا غیرفعال (enable=False) کردن یک نماد در MarketWatch
                 selected = mt5.symbol_select(symbol, enable)
                 if not selected:
                     print(f"Failed to select {symbol} with enable={enable}, error code = {mt5.last_error()}")
                     return False
-                # اگر enable=True، اطلاعات نماد را دریافت و ذخیره کن
+                # اگر عملیات فعال‌سازی بود، اطلاعات نماد را هم دریافت و برگردان
                 if enable:
                     symbol_info = mt5.symbol_info(symbol)
                     if symbol_info is None:
-                        print(f"Failed to get symbol info for {symbol}, error code = {mt5.last_error()}")
                         return False
-                    # چک کردن وضعیت بازار
+                    # بررسی وضعیت بازار
                     if symbol_info.bid == 0.0 and symbol_info.ask == 0.0:
                         print(f"No price data for {symbol}, market may be closed or data not updated")
-                        time.sleep(1)  # تاخیر 1 ثانیه
+                        time.sleep(1)
                         symbol_info = mt5.symbol_info(symbol)
                         if symbol_info is None or (symbol_info.bid == 0.0 and symbol_info.ask == 0.0):
                             print(f"Still no price data for {symbol}, skipping")
-                    # ذخیره اطلاعات نماد
+                    # ذخیره و چاپ اطلاعات
                     self.symbol_info_dict = symbol_info._asdict()
-                    # چاپ اطلاعات
                     print(f"Symbol info for {symbol}: {symbol_info}")
                     print(
                         f"{symbol}: currency_base = {symbol_info.currency_base}, currency_profit = {symbol_info.currency_profit}, currency_margin = {symbol_info.currency_margin}")
@@ -307,25 +319,19 @@ class Mt5_Manager:
                     for prop in self.symbol_info_dict:
                         print(f"  {prop}={self.symbol_info_dict[prop]}")
                     print()
-                    # تبدیل به DataFrame
+                    # تبدیل اطلاعات به DataFrame برای نمایش
                     df = pd.DataFrame(list(self.symbol_info_dict.items()), columns=['property', 'value'])
                     print("symbol_info_dict() as dataframe:")
                     print(df)
                     return True, self.symbol_info_dict
                 return True
 
+    # متد یکپارچه برای مدیریت عمق بازار (Depth of Market)
     def manage_market_book(self, action, symbol="EURUSD", login=None, password=None, server=None, timeout=60000):
         """
         متد برای مدیریت عملیات عمق بازار (اشتراک، دریافت داده، لغو اشتراک)
-        :param action: نوع عملیات ("add", "get", "release")
-        :param symbol: نماد مالی (پیش‌فرض EURUSD)
-        :param login: شماره حساب (اختیاری)
-        :param password: رمز عبور (اختیاری)
-        :param server: نام سرور (اختیاری)
-        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
-        :return: نتیجه عملیات (بسته به action)
         """
-        # اطمینان از مقدار معتبر action
+        # بررسی اعتبار 'action'
         if action not in ["add", "get", "release"]:
             print(f"Invalid action: {action}. Must be 'add', 'get', or 'release'.")
             return None
@@ -342,7 +348,7 @@ class Mt5_Manager:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None if action == "get" else False
 
-        # چک کردن وجود نماد در سرور
+        # اعتبارسنجی و انتخاب نماد (این الگو در بسیاری از متدها تکرار می‌شود)
         available_symbols = mt5.symbols_get()
         if not any(s.name == symbol for s in available_symbols):
             print(f"Symbol {symbol} not found in server")
@@ -352,15 +358,14 @@ class Mt5_Manager:
                 print(f"Fallback symbol EURUSD not found in server")
                 return None if action == "get" else False
 
-        # محدود کردن تعداد نمادهای فعال در MarketWatch
+        # ... (تکرار منطق پاکسازی MarketWatch و انتخاب نماد)
         current_symbols = mt5.symbols_get()
-        if current_symbols and len(current_symbols) > 100:  # محدودیت اختیاری
+        if current_symbols and len(current_symbols) > 100:
             print(f"Too many symbols in MarketWatch ({len(current_symbols)}), clearing MarketWatch")
             for s in current_symbols:
-                if s.name != symbol:  # نگه داشتن نماد مورد نظر
-                    mt5.symbol_select(s.name, False)  # غیرفعال کردن نمادهای دیگر
+                if s.name != symbol:
+                    mt5.symbol_select(s.name, False)
 
-        # فعال کردن نماد در MarketWatch
         selected = mt5.symbol_select(symbol, True)
         if not selected:
             print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
@@ -371,19 +376,18 @@ class Mt5_Manager:
                 print(f"Failed to select fallback symbol EURUSD, error code = {mt5.last_error()}")
                 return None if action == "get" else False
 
-        # چک کردن پشتیبانی از عمق بازار (برای add و get)
+        # بررسی اینکه آیا سرور بروکر برای این نماد، داده‌های عمق بازار را ارائه می‌دهد یا نه
         if action in ["add", "get"]:
             symbol_info = mt5.symbol_info(symbol)
             if symbol_info is None:
-                print(f"Failed to get symbol info for {symbol}, error code = {mt5.last_error()}")
                 return None if action == "get" else False
             if symbol_info.ticks_bookdepth == 0:
                 print(f"Market depth not supported for {symbol} on this server")
                 return None if action == "get" else False
 
-        # انجام عملیات بر اساس action
+        # انجام عملیات بر اساس 'action'
         if action == "add":
-            # اشتراک در رویدادهای عمق بازار
+            # اشتراک (subscribe) برای دریافت رویدادهای مربوط به تغییرات عمق بازار
             success = mt5.market_book_add(symbol)
             if not success:
                 print(f"Failed to subscribe to market book for {symbol}, error code = {mt5.last_error()}")
@@ -392,18 +396,16 @@ class Mt5_Manager:
             return True
 
         elif action == "get":
-            # اشتراک در عمق بازار (در صورت نیاز)
+            # ابتدا اشتراک را انجام می‌دهیم تا مطمئن شویم داده‌ها به‌روز هستند
             if not mt5.market_book_add(symbol):
-                print(f"Failed to subscribe to market book for {symbol}, error code = {mt5.last_error()}")
                 return None
-            # گرفتن داده‌های عمق بازار
+            # دریافت یک تصویر لحظه‌ای (snapshot) از وضعیت فعلی عمق بازار
             book_data = mt5.market_book_get(symbol)
             if book_data is None:
                 print(f"Failed to get market book data for {symbol}, error code = {mt5.last_error()}")
                 return None
-            # ذخیره داده‌های عمق بازار
-            self.market_book_data = [item._asdict() for item in book_data]  # تبدیل به لیست دیکشنری‌ها
-            # چاپ داده‌های عمق بازار
+            # ذخیره و چاپ داده‌ها
+            self.market_book_data = [item._asdict() for item in book_data]
             print(f"Market book data for {symbol}: {book_data}")
             if book_data:
                 print(f"Show market_book_get(\"{symbol}\")._asdict():")
@@ -414,7 +416,7 @@ class Mt5_Manager:
             return self.market_book_data
 
         elif action == "release":
-            # لغو اشتراک از رویدادهای عمق بازار
+            # لغو اشتراک (unsubscribe) از رویدادهای عمق بازار برای یک نماد
             success = mt5.market_book_release(symbol)
             if not success:
                 print(f"Failed to release market book for {symbol}, error code = {mt5.last_error()}")
@@ -424,25 +426,12 @@ class Mt5_Manager:
         else:
             pass
 
+    # متد یکپارچه برای دریافت داده‌های تاریخی (نرخ‌ها و تیک‌ها)
     def fetch_data(self, symbol="EURUSD", data_type="rates", method="from", timeframe=mt5.TIMEFRAME_H4, date_from=None,
                    date_to=None, start_pos=0, count=None, flags=mt5.COPY_TICKS_ALL, login=None, password=None,
                    server=None, timeout=60000):
         """
         متد یکپارچه برای دریافت نرخ‌ها یا تیک‌ها از MetaTrader 5
-        :param symbol: نماد مالی (پیش‌فرض EURUSD)
-        :param data_type: نوع داده ('rates' یا 'ticks')
-        :param method: روش دریافت داده ('from', 'from_pos', 'range')
-        :param timeframe: تایم‌فریم برای نرخ‌ها (پیش‌فرض H4)
-        :param date_from: تاریخ شروع (اختیاری)
-        :param date_to: تاریخ پایان برای روش range (اختیاری)
-        :param start_pos: ایندکس شروع برای روش from_pos (پیش‌فرض 0)
-        :param count: تعداد داده‌های درخواستی (پیش‌فرض 10 برای نرخ‌ها، 100000 برای تیک‌ها)
-        :param flags: نوع تیک‌ها برای روش‌های ticks (پیش‌فرض COPY_TICKS_ALL)
-        :param login: شماره حساب (اختیاری)
-        :param password: رمز عبور (اختیاری)
-        :param server: نام سرور (اختیاری)
-        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
-        :return: دیکشنری حاوی داده‌های خام و DataFrame
         """
         # تنظیمات نمایش DataFrame
         pd.set_option('display.max_columns', 500)
@@ -452,9 +441,10 @@ class Mt5_Manager:
         login = login or self.default_login
         password = password or self.default_password
         server = server or self.default_server
+        # اگر تعداد مشخص نشده بود، برای تیک‌ها ۱۰۰،۰۰۰ و برای نرخ‌ها ۱۰ در نظر بگیر
         count = count or (100000 if data_type == "ticks" else 10)
 
-        # تنظیم تاریخ‌های پیش‌فرض
+        # تنظیم تاریخ‌های پیش‌فرض در صورت عدم ارسال توسط کاربر
         timezone = pytz.timezone("Etc/UTC")
         if date_from is None:
             date_from = datetime.datetime(2020, 1, 10, tzinfo=timezone)
@@ -468,7 +458,7 @@ class Mt5_Manager:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
 
-        # چک کردن وجود نماد در سرور
+        # اعتبارسنجی و انتخاب نماد
         available_symbols = mt5.symbols_get()
         if not any(s.name == symbol for s in available_symbols):
             print(f"Symbol {symbol} not found in server")
@@ -478,30 +468,30 @@ class Mt5_Manager:
                 print(f"Fallback symbol EURUSD not found in server")
                 return None
 
-        # فعال کردن نماد در MarketWatch
         selected = mt5.symbol_select(symbol, True)
         if not selected:
             print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
             return None
 
-        # دریافت داده‌ها
+        # دریافت داده‌ها بر اساس نوع داده و روش درخواست شده
         data = None
-        if data_type == "rates":
-            if method == "from":
+        if data_type == "rates":  # اگر درخواست برای نرخ‌ها (کندل‌ها) بود
+            if method == "from":  # از یک تاریخ مشخص به تعداد count
                 data = mt5.copy_rates_from(symbol, timeframe, date_from, count)
-            elif method == "from_pos":
+            elif method == "from_pos":  # از یک موقعیت (ایندکس) مشخص به تعداد count
                 data = mt5.copy_rates_from_pos(symbol, timeframe, start_pos, count)
-            elif method == "range":
+            elif method == "range":  # در یک بازه زمانی مشخص
                 data = mt5.copy_rates_range(symbol, timeframe, date_from, date_to)
-        elif data_type == "ticks":
-            if method == "from":
+        elif data_type == "ticks":  # اگر درخواست برای تیک‌ها بود
+            if method == "from":  # از یک تاریخ مشخص به تعداد count
                 data = mt5.copy_ticks_from(symbol, date_from, count, flags)
-            elif method == "range":
+            elif method == "range":  # در یک بازه زمانی مشخص
                 data = mt5.copy_ticks_range(symbol, date_from, date_to, flags)
         else:
             print(f"Invalid data_type: {data_type}. Must be 'rates' or 'ticks'.")
             return None
 
+        # بررسی اعتبار روش دریافت داده
         if method not in ["from", "from_pos", "range"]:
             print(f"Invalid method: {method}. Must be 'from', 'from_pos', or 'range'.")
             return None
@@ -510,11 +500,11 @@ class Mt5_Manager:
             print(f"Failed to get {data_type} for {symbol}, error code = {mt5.last_error()}")
             return None
 
-        # نمایش تعداد داده‌های دریافت‌شده برای تیک‌ها
+        # چاپ تعداد داده‌های دریافت شده برای اطلاع
         if data_type == "ticks":
             print(f"Ticks received: {len(data)}")
 
-        # نمایش داده‌های خام (حداکثر 10 ردیف)
+        # چاپ ۱۰ ردیف اول از داده‌های خام برای نمونه
         print(f"Display obtained {data_type} 'as is'")
         counter = 0
         for item in data:
@@ -522,126 +512,97 @@ class Mt5_Manager:
             if counter <= 10:
                 print(item)
 
-        # ایجاد DataFrame
+        # ایجاد DataFrame از داده‌های دریافت شده
         data_frame = pd.DataFrame(data)
-        # تبدیل زمان به فرمت datetime
+        # تبدیل ستون زمان از فرمت timestamp (ثانیه) به فرمت datetime قابل خواندن
         if data_frame.shape[0] > 0:
             data_frame['time'] = pd.to_datetime(data_frame['time'], unit='s')
 
-        # نمایش DataFrame (حداکثر 10 ردیف)
+        # نمایش ۱۰ ردیف اول DataFrame
         print(f"\nDisplay dataframe with {data_type}")
         print(data_frame.head(10))
 
-        # تبدیل داده‌های خام به لیست دیکشنری‌ها
+        # تبدیل داده‌های خام به فرمت لیست دیکشنری‌ها (مناسب برای ارسال در API)
         if data_type == "rates":
             raw_data = [
                 {
-                    'time': item['time'],
-                    'open': item['open'],
-                    'high': item['high'],
-                    'low': item['low'],
-                    'close': item['close'],
-                    'tick_volume': item['tick_volume'],
-                    'spread': item['spread'],
+                    'time': item['time'], 'open': item['open'], 'high': item['high'], 'low': item['low'],
+                    'close': item['close'], 'tick_volume': item['tick_volume'], 'spread': item['spread'],
                     'real_volume': item['real_volume']
                 } for item in data
             ]
         else:  # ticks
             raw_data = [
                 {
-                    'time': item['time'],
-                    'bid': item['bid'],
-                    'ask': item['ask'],
-                    'last': item['last'],
-                    'flags': item['flags']
+                    'time': item['time'], 'bid': item['bid'], 'ask': item['ask'],
+                    'last': item['last'], 'flags': item['flags']
                 } for item in data
             ]
 
-        # برگرداندن دیکشنری حاوی داده‌های خام و DataFrame
+        # برگرداندن خروجی نهایی شامل داده‌های خام و DataFrame
         return {
             "raw_data": raw_data,
             "data_frame": data_frame
         }
 
+    # متد یکپارچه برای مدیریت تمام عملیات مربوط به معاملات و سفارشات
     def trade_manager(self, action="total", symbol="EURUSD", group=None, ticket=None, request=None, order_type=None,
                       volume=0.1, price=None, price_close=None, login=None, password=None, server=None, timeout=60000):
         """
         متد یکپارچه برای مدیریت سفارش‌ها و ارسال درخواست‌های معاملاتی در MetaTrader 5
-        :param action: نوع عملیات ('total', 'get', 'calc_margin', 'calc_profit', 'check', 'send')
-        :param symbol: نماد مالی (پیش‌فرض EURUSD)
-        :param group: فیلتر گروهی برای انتخاب سفارش‌ها (اختیاری)
-        :param ticket: تیکت سفارش (اختیاری)
-        :param request: ساختار درخواست معامله برای check یا send (اختیاری)
-        :param order_type: نوع سفارش (مانند ORDER_TYPE_BUY یا ORDER_TYPE_SELL)
-        :param volume: حجم معامله (پیش‌فرض 0.1)
-        :param price: قیمت باز برای محاسبه مارجین یا سود (اختیاری)
-        :param price_close: قیمت بسته برای محاسبه سود (اختیاری)
-        :param login: شماره حساب (اختیاری)
-        :param password: رمز عبور (اختیاری)
-        :param server: نام سرور (اختیاری)
-        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
-        :return: خروجی متناسب با نوع عملیات (عدد، دیکشنری، یا None)
         """
-        # تنظیمات نمایش DataFrame در کنسول برای خوانایی بهتر هنگام چاپ لیست سفارش‌ها
+        # تنظیمات نمایش DataFrame
         pd.set_option('display.max_columns', 500)
         pd.set_option('display.width', 1500)
 
-        # اگر کاربر لاگین، پسورد یا سرور را مشخص نکرده باشد، از مقادیر پیش‌فرض تعریف‌شده در کلاس استفاده کن
+        # استفاده از مقادیر پیش‌فرض
         login = login or self.default_login
         password = password or self.default_password
         server = server or self.default_server
 
-        # اطمینان از برقراری ارتباط با سرور متاتریدر 5 با استفاده از متد کمکی
+        # اطمینان از اتصال
         success = self.manage_connection(action="initialize", login=login, password=password, server=server,
                                          timeout=timeout)
-        # اگر اتصال ناموفق بود، خطا را چاپ کن و از تابع خارج شو
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
 
-        # برای عملیات‌هایی که نیاز به کار با یک نماد خاص دارند، آن را بررسی و آماده کن
+        # اعتبارسنجی و آماده‌سازی نماد برای عملیات‌هایی که به آن نیاز دارند
         if action in ["get", "calc_margin", "calc_profit", "check", "send"]:
-            # اگر اکشن 'send' یا 'check' بود، نماد را از داخل ساختار request بخوان؛ در غیر این صورت از پارامتر symbol استفاده کن
+            # اگر اکشن 'send' یا 'check' بود، نماد را از داخل خود درخواست بخوان
             symbol = request.get("symbol", symbol) if action in ["send", "check"] and request else symbol
-            # لیست تمام نمادهای موجود در سرور را دریافت کن
+            # اعتبارسنجی نماد و استفاده از EURUSD در صورت عدم وجود
             available_symbols = mt5.symbols_get()
-            # بررسی کن آیا نماد درخواستی در لیست نمادهای سرور وجود دارد یا نه
             if not any(s.name == symbol for s in available_symbols):
                 print(f"Symbol {symbol} not found in server")
                 print(f"Retrying with fallback symbol EURUSD")
-                # اگر وجود نداشت، به نماد پیش‌فرض EURUSD برگرد
                 symbol = "EURUSD"
-                # اگر اکشن 'send' یا 'check' بود، نماد داخل درخواست را هم با نماد جایگزین به‌روز کن
                 if action in ["send", "check"] and request:
                     request["symbol"] = symbol
-                # دوباره بررسی کن که آیا حتی نماد پیش‌فرض (EURUSD) هم در سرور وجود دارد
                 if not any(s.name == symbol for s in available_symbols):
                     print(f"Fallback symbol EURUSD not found in server")
                     return None
 
-            # نماد مورد نظر را در پنجره MarketWatch متاتریدر فعال کن تا بتوان اطلاعات قیمت آن را دریافت کرد
             selected = mt5.symbol_select(symbol, True)
             if not selected:
                 print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
                 return None
 
-            # برای عملیات 'send' و 'check'، اطلاعات کامل نماد را دریافت و درخواست را بر اساس آن تنظیم کن
+            # برای عملیات 'send' و 'check'، درخواست را بر اساس مشخصات نماد تنظیم می‌کنیم
             if action in ["send", "check"] and request:
-                # دریافت اطلاعات کامل نماد (مانند نوع اجرا، حالت پر کردن سفارش و ...)
                 symbol_info = mt5.symbol_info(symbol)
                 if symbol_info is None:
-                    print(f"Failed to get symbol info for {symbol}, error code = {mt5.last_error()}")
                     return None
 
-                # بررسی نوع پر کردن (filling mode) مجاز برای این نماد
+                # بررسی نوع پر کردن سفارش (Filling Mode)
                 filling_mode = symbol_info.filling_mode
-                # دریافت نوع پر کردن درخواستی از کاربر (پیش‌فرض: FOK)
+                # دریافت نوع پر کردن از درخواست، با مقدار پیش‌فرض IOC (نتیجه دیباگ قبلی)
                 requested_filling = request.get("type_filling", mt5.ORDER_FILLING_IOC)
-                # اگر نوع درخواستی توسط نماد پشتیبانی نمی‌شود، آن را اصلاح کن
+                # اگر نوع درخواستی توسط بروکر پشتیبانی نمی‌شود، آن را اصلاح کن
                 if not (filling_mode & requested_filling):
                     print(
                         f"Requested filling mode {requested_filling} not supported for {symbol}, filling_mode={filling_mode}")
-                    # سعی کن از حالت‌های جایگزین (FOK یا IOC) استفاده کنی
+                    # تلاش برای استفاده از حالت‌های جایگزین
                     if filling_mode & mt5.ORDER_FILLING_FOK:
                         request["type_filling"] = mt5.ORDER_FILLING_FOK
                         print(f"Falling back to ORDER_FILLING_FOK")
@@ -649,51 +610,42 @@ class Mt5_Manager:
                         request["type_filling"] = mt5.ORDER_FILLING_IOC
                         print(f"Falling back to ORDER_FILLING_IOC")
                     else:
-                        # اگر هیچ حالت پر کردنی پشتیبانی نشود، با خطا از تابع خارج شو
                         print(f"No supported filling mode for {symbol}, filling_mode={filling_mode}")
                         return None
 
-                # بررسی نوع اجرای معامله (trade execution mode)
+                # بررسی نوع اجرای معامله (Execution Mode)
                 try:
-                    # خواندن نوع اجرا از اطلاعات نماد
                     trade_exemode = symbol_info.trade_exemode
                 except AttributeError:
-                    # اگر این ویژگی در اطلاعات نماد نبود، حالت پیش‌فرض Market Execution را در نظر بگیر
                     print(f"trade_exemode not found in symbol_info, assuming Market Execution")
-                    # ------------------- خط اصلاح شده اول -------------------
-                    # از نام ثابت صحیح 'SYMBOL_TRADE_EXECUTION_MARKET' استفاده شده است
+                    # استفاده از نام ثابت صحیح که در دیباگ قبلی اصلاح شد
                     trade_exemode = mt5.SYMBOL_TRADE_EXECUTION_MARKET
 
-                # اگر نوع اجرا Market Execution (اجرای فوری به قیمت بازار) باشد، قیمت را باید خودکار تنظیم کرد
-                # ------------------- خط اصلاح شده دوم -------------------
-                # از نام ثابت صحیح 'SYMBOL_TRADE_EXECUTION_MARKET' برای مقایسه استفاده شده است
+                # اگر نوع اجرا 'Market Execution' بود، قیمت را نباید از کاربر گرفت، بلکه باید از سرور خواند
                 if trade_exemode == mt5.SYMBOL_TRADE_EXECUTION_MARKET and request["action"] == mt5.TRADE_ACTION_DEAL:
-                    # در این حالت، قیمت نباید توسط کاربر ارسال شود، پس اگر وجود دارد آن را از درخواست حذف می‌کنیم
+                    # اگر کاربر قیمتی ارسال کرده بود، آن را حذف می‌کنیم
                     if "price" in request:
                         del request["price"]
-                    # آخرین قیمت تیک (bid/ask) را از سرور دریافت کن
+                    # آخرین قیمت تیک را می‌خوانیم
                     symbol_tick = mt5.symbol_info_tick(symbol)
                     if symbol_tick is None:
-                        print(f"Failed to get tick data for {symbol}, error code = {mt5.last_error()}")
                         return None
-                    # قیمت را بر اساس نوع معامله (خرید یا فروش) در درخواست قرار بده
+                    # قیمت خرید (ask) یا فروش (bid) را بر اساس نوع سفارش در درخواست قرار می‌دهیم
                     request["price"] = symbol_tick.ask if request["type"] == mt5.ORDER_TYPE_BUY else symbol_tick.bid
                     print(f"Set price to {request['price']} for Market Execution")
 
-        # -------------- بخش پردازش دستورات بر اساس پارامتر 'action' --------------
+        # --- بخش پردازش دستورات بر اساس پارامتر 'action' ---
 
-        # اگر دستور 'total' بود، تعداد کل سفارش‌های فعال را برگردان
         if action == "total":
+            # دریافت تعداد کل سفارش‌های در حال انتظار
             orders = mt5.orders_total()
             if orders is None:
-                print(f"Failed to get total orders, error code = {mt5.last_error()}")
                 return None
             print(f"Total orders: {orders}")
             return orders
 
-        # اگر دستور 'get' بود، لیست سفارش‌ها را برگردان
         elif action == "get":
-            # بر اساس فیلترهای ورودی (ticket, group, symbol) سفارش‌ها را دریافت کن
+            # دریافت لیست سفارش‌ها بر اساس فیلترهای مختلف
             if ticket is not None:
                 orders = mt5.orders_get(ticket=ticket)
             elif group is not None:
@@ -701,71 +653,58 @@ class Mt5_Manager:
             elif symbol is not None:
                 orders = mt5.orders_get(symbol=symbol)
             else:
-                # اگر هیچ فیلتری نبود، تمام سفارش‌ها را دریافت کن
                 orders = mt5.orders_get()
 
             if orders is None:
-                print(f"No orders found, error code = {mt5.last_error()}")
                 return None
 
             print(f"Total orders: {len(orders)}")
             for order in orders:
                 print(order)
 
-            # اگر سفارشی وجود داشت، آن را به DataFrame تبدیل کن
+            # تبدیل لیست سفارش‌ها به DataFrame برای نمایش بهتر
             if len(orders) > 0:
                 df = pd.DataFrame(list(orders), columns=orders[0]._asdict().keys())
-                # ستون‌های غیرضروری را برای نمایش بهتر حذف کن
                 df.drop(['time_done', 'time_done_msc', 'position_id', 'position_by_id', 'reason', 'volume_initial',
                          'price_stoplimit'], axis=1, inplace=True, errors='ignore')
-                # زمان را از فرمت timestamp به فرمت تاریخ قابل خواندن تبدیل کن
                 df['time_setup'] = pd.to_datetime(df['time_setup'], unit='s')
                 print("\nDisplay dataframe with orders")
                 print(df)
-                # خروجی شامل لیست خام سفارش‌ها و DataFrame مرتب‌شده است
                 return {"raw_orders": [order._asdict() for order in orders], "orders_frame": df}
             else:
                 print("No orders to display")
                 return {"raw_orders": [], "orders_frame": pd.DataFrame()}
 
-        # اگر دستور 'calc_margin' بود، مارجین مورد نیاز برای معامله را محاسبه کن
         elif action == "calc_margin":
+            # محاسبه مارجین مورد نیاز برای یک معامله
             if order_type is None or price is None:
-                print("order_type and price are required for calc_margin")
                 return None
             margin = mt5.order_calc_margin(order_type, symbol, volume, price)
             if margin is None:
-                print(f"Failed to calculate margin for {symbol}, error code = {mt5.last_error()}")
                 return None
-            # واحد پول حساب را برای نمایش بهتر دریافت کن
             account_currency = mt5.account_info().currency if mt5.account_info() else "USD"
             print(f"{symbol} {order_type} {volume} lot margin: {margin} {account_currency}")
             return margin
 
-        # اگر دستور 'calc_profit' بود، سود یا زیان معامله را محاسبه کن
         elif action == "calc_profit":
+            # محاسبه سود یا زیان یک معامله فرضی
             if order_type is None or price is None or price_close is None:
-                print("order_type, price, and price_close are required for calc_profit")
                 return None
             profit = mt5.order_calc_profit(order_type, symbol, volume, price, price_close)
             if profit is None:
-                print(f"Failed to calculate profit for {symbol}, error code = {mt5.last_error()}")
                 return None
             account_currency = mt5.account_info().currency if mt5.account_info() else "USD"
             print(f"{symbol} {order_type} {volume} lot profit: {profit} {account_currency}")
             return profit
 
-        # اگر دستور 'check' بود، درخواست معامله را بدون ارسال، بررسی کن
         elif action == "check":
+            # بررسی یک درخواست معامله بدون ارسال آن برای اجرا
             if request is None:
-                print("request is required for order_check")
                 return None
-            # درخواست را برای بررسی به سرور متاتریدر ارسال کن
             result = mt5.order_check(request)
             if result is None:
-                print(f"order_check failed, error code = {mt5.last_error()}")
                 return None
-            # نتیجه بررسی را با جزئیات کامل چاپ کن
+            # چاپ نتیجه بررسی با تمام جزئیات
             print(f"order_check result: {result}")
             result_dict = result._asdict()
             for field in result_dict:
@@ -776,21 +715,19 @@ class Mt5_Manager:
                         print(f"       traderequest: {tradereq_field}={traderequest_dict[tradereq_field]}")
             return result_dict
 
-        # اگر دستور 'send' بود، درخواست معامله را برای اجرا ارسال کن
         elif action == "send":
+            # ارسال درخواست معامله برای اجرا
             if request is None:
-                print("request is required for order_send")
                 return None
-            # ارسال درخواست معامله به سرور متاتریدر
             result = mt5.order_send(request)
             if result is None:
-                print(f"order_send failed, error code = {mt5.last_error()}")
                 return None
             print(
                 f"order_send(): {request['action']} for {symbol} {request.get('volume', 0.0)} lots at {request.get('price', 0.0)} with deviation={request.get('deviation', 0)} points")
-            # اگر کد بازگشتی نشان‌دهنده عدم موفقیت بود، جزئیات خطا را چاپ کن
+            # بررسی کد بازگشتی برای اطمینان از موفقیت معامله
             if result.retcode != mt5.TRADE_RETCODE_DONE:
                 print(f"order_send failed, retcode={result.retcode}")
+                # اگر ناموفق بود، جزئیات کامل نتیجه را چاپ کن
                 result_dict = result._asdict()
                 for field in result_dict:
                     print(f"   {field}={result_dict[field]}")
@@ -799,7 +736,7 @@ class Mt5_Manager:
                         for tradereq_field in traderequest_dict:
                             print(f"       traderequest: {tradereq_field}={traderequest_dict[tradereq_field]}")
                 return None
-            # اگر معامله با موفقیت انجام شد، جزئیات آن را چاپ کن
+            # اگر موفق بود، جزئیات را چاپ کن
             print(f"order_send done, {result}")
             result_dict = result._asdict()
             for field in result_dict:
@@ -810,8 +747,8 @@ class Mt5_Manager:
                         print(f"       traderequest: {tradereq_field}={traderequest_dict[tradereq_field]}")
             return result_dict
 
-        # اگر پارامتر 'action' ارسال شده معتبر نباشد، پیام خطا نمایش بده
         else:
+            # اگر 'action' ارسال شده معتبر نبود، پیام خطا نمایش بده
             print(
                 f"Invalid action: {action}. Must be 'total', 'get', 'calc_margin', 'calc_profit', 'check', or 'send'.")
             return None
