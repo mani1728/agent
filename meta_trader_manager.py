@@ -2,6 +2,9 @@
 import MetaTrader5 as mt5
 import pandas as pd
 import time
+import pytz
+import datetime
+
 
 class Mt5_Manager:
     def __init__(self):
@@ -21,14 +24,16 @@ class Mt5_Manager:
         self.symbol_tick_dict = None  # برای ذخیره اطلاعات تیک
         self.market_book_data = None  # برای ذخیره داده‌های عمق بازار
 
-    def manage_connection(self, action, path=None, login=None, password=None, server=None, timeout=60000, portable=False):
+    def manage_connection(self, action, path=None, login=None, password=None, server=None, timeout=60000,
+                          portable=False):
         """
         متد برای مدیریت اتصال به MetaTrader 5 (اتصال، لاگین، اطلاعات ترمینال، نسخه، اطلاعات حساب و قطع اتصال)
         :param action: نوع عملیات ("initialize", "login", "terminal_info", "version", "account_info", "shutdown")
         """
         # اطمینان از مقدار معتبر action
         if action not in ["initialize", "login", "terminal_info", "version", "account_info", "shutdown"]:
-            print(f"Invalid action: {action}. Must be one of 'initialize', 'login', 'terminal_info', 'version', 'account_info', 'shutdown'.")
+            print(
+                f"Invalid action: {action}. Must be one of 'initialize', 'login', 'terminal_info', 'version', 'account_info', 'shutdown'.")
             return None
 
         # استفاده از مقادیر پیش‌فرض
@@ -46,7 +51,8 @@ class Mt5_Manager:
                 return True
             # اتصال به MetaTrader 5
             print(f"mt5_init called: Connecting to MetaTrader 5 with path={path}, login={login}, server={server}")
-            if not mt5.initialize(path=path, login=login, password=password, server=server, timeout=timeout, portable=portable):
+            if not mt5.initialize(path=path, login=login, password=password, server=server, timeout=timeout,
+                                  portable=portable):
                 print(f"initialize() failed, error code = {mt5.last_error()}")
                 print("MT5 initialization failed")
                 return False
@@ -60,7 +66,8 @@ class Mt5_Manager:
 
         elif action == "login":
             # لاگین با استفاده از initialize
-            success = self.manage_connection(action="initialize", path=path, login=login, password=password, server=server, timeout=timeout, portable=portable)
+            success = self.manage_connection(action="initialize", path=path, login=login, password=password,
+                                             server=server, timeout=timeout, portable=portable)
             return success, self.terminal_info, self.version
 
         elif action == "terminal_info":
@@ -85,9 +92,11 @@ class Mt5_Manager:
 
         elif action == "account_info":
             # اطمینان از اتصال
-            success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
+            success = self.manage_connection(action="initialize", login=login, password=password, server=server,
+                                             timeout=timeout)
             if not success:
-                print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
+                print(
+                    f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
                 return None
             # گرفتن اطلاعات حساب
             account_info = mt5.account_info()
@@ -117,7 +126,8 @@ class Mt5_Manager:
             self.account_info_dict = None
             return True
 
-    def manage_symbols(self, action, symbol=None, group="*", enable=True, login=None, password=None, server=None, timeout=60000):
+    def manage_symbols(self, action, symbol=None, group="*", enable=True, login=None, password=None, server=None,
+                       timeout=60000):
         """
         متد برای مدیریت عملیات نمادها (تعداد، لیست، اطلاعات نماد، اطلاعات تیک، فعال/غیرفعال کردن)
         :param action: نوع عملیات ("total", "get", "info", "tick", "select")
@@ -142,7 +152,8 @@ class Mt5_Manager:
         symbol = symbol or "EURUSD" if action in ["info", "tick", "select"] else None
 
         # اطمینان از اتصال
-        success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server,
+                                         timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
@@ -288,7 +299,8 @@ class Mt5_Manager:
                     self.symbol_info_dict = symbol_info._asdict()
                     # چاپ اطلاعات
                     print(f"Symbol info for {symbol}: {symbol_info}")
-                    print(f"{symbol}: currency_base = {symbol_info.currency_base}, currency_profit = {symbol_info.currency_profit}, currency_margin = {symbol_info.currency_margin}")
+                    print(
+                        f"{symbol}: currency_base = {symbol_info.currency_base}, currency_profit = {symbol_info.currency_profit}, currency_margin = {symbol_info.currency_margin}")
                     print()
                     print(f"Show symbol_info(\"{symbol}\")._asdict():")
                     for prop in self.symbol_info_dict:
@@ -323,7 +335,8 @@ class Mt5_Manager:
         server = server or self.default_server
 
         # اطمینان از اتصال
-        success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server,
+                                         timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None if action == "get" else False
@@ -407,3 +420,81 @@ class Mt5_Manager:
                 return False
             print(f"Successfully released market book for {symbol}")
             return True
+        else:
+            pass
+
+    def copy_rates_from(self, symbol="EURUSD", timeframe=mt5.TIMEFRAME_H4, date_from=None, count=10, login=None, password=None, server=None, timeout=60000):
+        """
+        متد برای دریافت داده‌های قیمتی (نرخ‌ها) از MetaTrader 5
+        :param symbol: نماد مالی (پیش‌فرض EURUSD)
+        :param timeframe: تایم‌فریم (پیش‌فرض H4)
+        :param date_from: تاریخ شروع (اختیاری، فرمت datetime)
+        :param count: تعداد کندل‌ها برای دریافت (پیش‌فرض 10)
+        :param login: شماره حساب (اختیاری)
+        :param password: رمز عبور (اختیاری)
+        :param server: نام سرور (اختیاری)
+        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
+        :return: دیکشنری حاوی داده‌های خام و DataFrame
+        """
+        # تنظیمات نمایش DataFrame
+        pd.set_option('display.max_columns', 500)
+        pd.set_option('display.width', 1500)
+
+        # استفاده از مقادیر پیش‌فرض
+        login = login or self.default_login
+        password = password or self.default_password
+        server = server or self.default_server
+
+        # تنظیم تاریخ پیش‌فرض اگر date_from داده نشده باشد
+        if date_from is None:
+            timezone = pytz.timezone("Etc/UTC")
+            date_from = datetime.datetime(2020, 1, 10, tzinfo=timezone)
+
+        # اطمینان از اتصال
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
+        if not success:
+            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
+            return None
+
+        # چک کردن وجود نماد در سرور
+        available_symbols = mt5.symbols_get()
+        if not any(s.name == symbol for s in available_symbols):
+            print(f"Symbol {symbol} not found in server")
+            print(f"Retrying with fallback symbol EURUSD")
+            symbol = "EURUSD"
+            if not any(s.name == symbol for s in available_symbols):
+                print(f"Fallback symbol EURUSD not found in server")
+                return None
+
+        # فعال کردن نماد در MarketWatch
+        selected = mt5.symbol_select(symbol, True)
+        if not selected:
+            print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
+            return None
+
+        # دریافت داده‌های قیمتی
+        rates = mt5.copy_rates_from(symbol, timeframe, date_from, count)
+        if rates is None:
+            print(f"Failed to get rates for {symbol}, error code = {mt5.last_error()}")
+            return None
+
+        # نمایش داده‌های خام
+        print("Display obtained data 'as is'")
+        for rate in rates:
+            print(rate)
+
+        # ایجاد DataFrame از داده‌های دریافت‌شده
+        rates_frame = pd.DataFrame(rates)
+        # تبدیل زمان از ثانیه به فرمت datetime
+        rates_frame['time'] = pd.to_datetime(rates_frame['time'], unit='s')
+
+        # نمایش DataFrame
+        print("\nDisplay dataframe with data")
+        print(rates_frame)
+
+        # برگرداندن دیکشنری حاوی داده‌های خام و DataFrame
+        return {
+            "raw_rates": [rate._asdict() for rate in rates],
+            "rates_frame": rates_frame
+        }
+
