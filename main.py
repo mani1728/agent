@@ -8,7 +8,8 @@ import json  # برای کار با داده‌های با فرمت JSON
 from meta_trader_manager import Mt5_Manager  # وارد کردن کلاس مدیریت متاتریدر که خودمان نوشتیم
 import MetaTrader5 as mt5  # کتابخانه رسمی برای اتصال به متاتریدر ۵
 import datetime  # برای کار با تاریخ و زمان
-import pytz
+import pytz  # برای کار با مناطق زمانی (Timezones)
+
 # --- تنظیمات کلی و استاتیک برنامه ---
 KAFKA_SERVERS = "192.168.1.254:9092"  # آدرس سرور یا سرورهای کافکا
 TOPIC = "agent-send"  # نام تاپیکی که برنامه به آن گوش می‌دهد
@@ -20,7 +21,7 @@ CLASS_MAP = {
 }
 
 
-# کلاس اصلی برنامه که وظیفه گوش دادن به کافKA و پردازش پیام‌ها را بر عهده دارد
+# کلاس اصلی برنامه که وظیفه گوش دادن به کافکا و پردازش پیام‌ها را بر عهده دارد
 class KafkaListener:
     # متد سازنده (Constructor) که در زمان ساختن یک نمونه از کلاس، به صورت خودکار فراخوانی می‌شود
     def __init__(self):
@@ -81,7 +82,6 @@ class KafkaListener:
                     continue
 
                 # مقدار (value) و کلید (key) پیام را از آن استخراج کن
-                # پیام‌ها به صورت بایت (bytes) هستند، پس آنها را به رشته (string) با انکدینگ utf-8 تبدیل می‌کنیم
                 value = msg.value().decode('utf-8') if msg.value() else "No value"
                 key = msg.key().decode('utf-8') if msg.key() else "No key"
 
@@ -105,53 +105,48 @@ class KafkaListener:
             print(f"Error processing message: {e}")
         finally:
             # این بلوک کد در هر صورت (چه با خطا و چه بدون خطا) در انتهای کار اجرا می‌شود
-            # اگر Consumer هنوز باز است، آن را ببند تا منابع آزاد شوند
             if self.consumer:
-                self.consumer.close()
+                self.consumer.close()  # بستن اتصال کافکا
                 print("Kafka consumer closed.")
 
     # متدی برای پردازش پیام دریافت شده
     def process_message(self, class_name, value):
         try:
-            # گاهی JSON ارسالی از سینگل کوتیشن (') استفاده می‌کند که استاندارد نیست. آن را به دابل کوتیشن (") تبدیل می‌کنیم
+            # جایگزینی سینگل کوتیشن با دابل کوتیشن برای سازگاری با فرمت استاندارد JSON
             cleaned_value = value.replace("'", '"')
             print(f"Cleaned value: {cleaned_value}")
 
-            # رشته JSON را به یک آبجکت پایتون (لیست یا دیکشنری) تبدیل (parse) می‌کنیم
+            # رشته JSON را به یک آبجکت پایتون (لیست یا دیکشنری) تبدیل می‌کنیم
             value_list = json.loads(cleaned_value)
 
-            # برای سادگی کار، همیشه با پیام به عنوان یک لیست رفتار می‌کنیم. اگر یک آبجکت تنها بود، آن را داخل یک لیست قرار می‌دهیم
+            # برای سادگی، همیشه با پیام به عنوان یک لیست رفتار می‌کنیم
             if not isinstance(value_list, list):
                 value_list = [value_list]
 
-            # بررسی می‌کنیم که آیا نام کلاس استخراج شده از key، در CLASS_MAP ما تعریف شده است یا نه
+            # بررسی وجود کلاس در CLASS_MAP
             if class_name not in self.manager_instances:
                 print(f"Class instance for '{class_name}' not found.")
                 return
 
-            # --- استفاده از نمونه بهینه‌سازی شده ---
-            # به جای ساختن نمونه جدید، از نمونه‌ای که در __init__ ساختیم استفاده می‌کنیم
+            # استفاده از نمونه از پیش ساخته شده کلاس برای جلوگیری از ساختن مکرر
             instance = self.manager_instances[class_name]
 
-            # پیام کافکا می‌تواند شامل یک لیست از دستورات باشد، پس روی آنها حلقه می‌زنیم
+            # حلقه بر روی تمام دستورات موجود در پیام
             for command in value_list:
-                # نام متد و پارامترهای آن را از هر دستور استخراج می‌کنیم
                 method_name = command.get("method")
                 params = command.get("params", {})
 
-                # --- بخش تبدیل داده‌ها ---
-                # این بخش مقادیر رشته‌ای دریافتی از JSON را به مقادیر واقعی مورد نیاز متدها تبدیل می‌کند
+                # --- بخش تبدیل داده‌ها (Data Type Conversion) ---
 
-                # تبدیل رشته تایم‌فریم (مثلاً "TIMEFRAME_H4") به ثابت واقعی متاتریدر (mt5.TIMEFRAME_H4)
+                # تبدیل رشته تایم‌فریم به ثابت متاتریدر
                 if "timeframe" in params and isinstance(params["timeframe"], str):
                     params["timeframe"] = getattr(mt5, params["timeframe"], mt5.TIMEFRAME_H4)
 
-                # منطقه زمانی استاندارد را تعریف کن
+                # تعریف منطقه زمانی استاندارد UTC
                 timezone = pytz.timezone("Etc/UTC")
 
-                # تبدیل رشته تاریخ با فرمت ISO به آبجکت datetime آگاه از منطقه زمانی
+                # تبدیل رشته تاریخ به آبجکت datetime آگاه از منطقه زمانی (Timezone-Aware)
                 if "date_from" in params and isinstance(params["date_from"], str):
-                    # ابتدا به datetime تبدیل کرده و سپس منطقه زمانی را به آن متصل کن
                     naive_dt = datetime.datetime.fromisoformat(params["date_from"])
                     params["date_from"] = timezone.localize(naive_dt)
 
@@ -159,19 +154,19 @@ class KafkaListener:
                     naive_dt = datetime.datetime.fromisoformat(params["date_to"])
                     params["date_to"] = timezone.localize(naive_dt)
 
-                # تبدیل رشته فلگ (مثلاً "COPY_TICKS_ALL") به ثابت واقعی متاتریدر
+                # تبدیل رشته فلگ به ثابت متاتریدر
                 if "flags" in params and isinstance(params["flags"], str):
                     params["flags"] = getattr(mt5, params["flags"], mt5.COPY_TICKS_ALL)
 
-                # تبدیل رشته action به حروف کوچک (برای سادگی در متدهای دیگر)
+                # تبدیل رشته action به حروف کوچک
                 if "action" in params and isinstance(params["action"], str):
                     params["action"] = params["action"].lower()
 
-                # تبدیل رشته نوع سفارش (مثلاً "ORDER_TYPE_BUY") به ثابت واقعی متاتریدر
+                # تبدیل رشته نوع سفارش به ثابت متاتریدر
                 if "order_type" in params and isinstance(params["order_type"], str):
                     params["order_type"] = getattr(mt5, params["order_type"], mt5.ORDER_TYPE_BUY)
 
-                # تبدیل فیلدهای داخل دیکشنری request
+                # تبدیل فیلدهای رشته‌ای داخل دیکشنری request به ثابت‌های متاتریدر
                 if "request" in params and isinstance(params["request"], dict):
                     request = params["request"]
                     if "action" in request and isinstance(request["action"], str):
@@ -181,47 +176,37 @@ class KafkaListener:
                     if "type_time" in request and isinstance(request["type_time"], str):
                         request["type_time"] = getattr(mt5, request["type_time"], mt5.ORDER_TIME_GTC)
                     if "type_filling" in request and isinstance(request["type_filling"], str):
-                        # استفاده از مقدار پیش‌فرض صحیح که در مکالمات قبلی به آن رسیدیم
                         request["type_filling"] = getattr(mt5, request["type_filling"], mt5.ORDER_FILLING_IOC)
 
-                # بررسی می‌کنیم که آیا نام متد معتبر است و در کلاس مورد نظر وجود دارد
+                # بررسی وجود متد در کلاس
                 if not method_name or not hasattr(instance, method_name):
                     print(f"Method '{method_name}' not found in class '{class_name}'")
-                    print(f"Available methods: {dir(instance)}")
-                    continue  # اگر متد وجود نداشت، این دستور را رها کرده و به سراغ دستور بعدی در لیست می‌رویم
+                    continue
 
-                # آبجکت واقعی متد را از نمونه کلاس دریافت می‌کنیم
+                # دریافت آبجکت متد
                 method = getattr(instance, method_name)
 
                 try:
-                    # متد را با پارامترهای استخراج شده فراخوانی می‌کنیم
-                    # اپراتور ** باعث می‌شود دیکشنری params به صورت پارامترهای جداگانه به متد ارسال شود
+                    # فراخوانی داینامیک متد با پارامترهای استخراج شده
                     print(f"Calling {class_name}.{method_name} with params: {params}")
                     result = method(**params)
                     print(f"Result of {method_name}: {result}")
 
-                    # یک بخش خاص برای مدیریت خروجی متد login (اگر وجود داشته باشد)
-                    if method_name == "login":
-                        success, terminal_info, version = result
-                        print(f"Stored terminal_info: {terminal_info}")
-                        print(f"Stored version: {version}")
-
                 except TypeError as e:
-                    # اگر پارامترهای ارسال شده با پارامترهای مورد نیاز متد همخوانی نداشته باشد، این خطا رخ می‌دهد
+                    # مدیریت خطای عدم تطابق پارامترها
                     print(f"Error calling {method_name}: Invalid parameters - {e}")
 
         except json.JSONDecodeError:
-            # اگر رشته دریافتی، یک JSON معتبر نباشد
+            # مدیریت خطای نامعتبر بودن JSON
             print(f"Invalid JSON in value: {cleaned_value}")
         except Exception as e:
-            # هر خطای پیش‌بینی‌نشده دیگر در پردازش پیام
+            # مدیریت سایر خطاهای پیش‌بینی‌نشده
             print(f"Error processing message: {e}")
 
 
 # --- نقطه شروع اجرای برنامه ---
-# این شرط بررسی می‌کند که آیا این فایل مستقیماً اجرا شده است یا به عنوان ماژول در فایل دیگری import شده
 if __name__ == "__main__":
-    # یک نمونه از کلاس شنونده کافکا می‌سازیم
+    # ساخت یک نمونه از شنونده کافکا
     listener = KafkaListener()
-    # متد listen را فراخوانی می‌کنیم تا برنامه شروع به گوش دادن به پیام‌ها کند
+    # شروع به گوش دادن
     listener.listen()
