@@ -740,4 +740,145 @@ class Mt5_Manager:
             print(
                 f"Invalid action: {action}. Must be one of 'total', 'get', 'calc_margin', 'calc_profit', 'check', or 'send'.")
             return None
-        
+
+    # این متود را به کلاس Mt5_Manager خود اضافه کنید
+
+    def manage_positions_history(self, action, symbol=None, group=None, ticket=None, position_id=None, date_from=None,
+                                 date_to=None, login=None, password=None, server=None, timeout=60000):
+        """
+        متد یکپارچه برای مدیریت پوزیشن‌های باز و تاریخچه معاملات (سفارشات و دیل‌ها).
+        :param action: نوع عملیات:
+                       - برای پوزیشن‌های باز: 'positions_total', 'positions_get'
+                       - برای تاریخچه سفارشات: 'history_orders_total', 'history_orders_get'
+                       - برای تاریخچه دیل‌ها: 'history_deals_total', 'history_deals_get'
+        :param symbol: نام نماد برای فیلتر کردن پوزیشن‌های باز (فقط برای 'positions_get').
+        :param group: فیلتر گروهی برای نمادها (برای 'positions_get', 'history_orders_get', 'history_deals_get').
+        :param ticket: تیکت یک پوزیشن یا سفارش خاص.
+        :param position_id: تیکت یک پوزیشن برای فیلتر کردن سفارشات یا دیل‌های مرتبط با آن.
+        :param date_from: تاریخ شروع برای دریافت تاریخچه (datetime object).
+        :param date_to: تاریخ پایان برای دریافت تاریخچه (datetime object).
+        :return: نتیجه عملیات (عدد، لیست دیکشنری‌ها، یا None).
+        """
+        # --- بخش ۱: آماده‌سازی و اعتبارسنجی ---
+
+        # لیست تمام اکشن‌های مجاز برای این متود
+        allowed_actions = [
+            'positions_total', 'positions_get',
+            'history_orders_total', 'history_orders_get',
+            'history_deals_total', 'history_deals_get'
+        ]
+        # بررسی اینکه آیا 'action' ارسال شده معتبر است یا خیر
+        if action not in allowed_actions:
+            print(f"Invalid action: {action}. Please use one of {allowed_actions}")
+            return None
+
+        # استفاده از مقادیر پیش‌فرض برای اتصال
+        login = login or self.default_login
+        password = password or self.default_password
+        server = server or self.default_server
+
+        # اطمینان از برقراری ارتباط با سرور متاتریدر 5
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server,
+                                         timeout=timeout)
+        if not success:
+            print(f"Failed to connect to trade account {login}, error code = {mt5.last_error()}")
+            return None
+
+        # تنظیم تاریخ‌های پیش‌فرض برای درخواست‌های تاریخچه در صورت عدم ارسال
+        if action.startswith('history'):
+            if date_from is None:
+                # اگر تاریخ شروع مشخص نشده بود، ۳۰ روز قبل را در نظر بگیر
+                date_from = datetime.datetime.now() - datetime.timedelta(days=30)
+            if date_to is None:
+                # اگر تاریخ پایان مشخص نشده بود، زمان حال را در نظر بگیر
+                date_to = datetime.datetime.now()
+
+        # --- بخش ۲: اجرای اکشن‌ها ---
+
+        # --- پوزیشن‌های باز ---
+        if action == 'positions_total':
+            # دریافت تعداد کل پوزیشن‌های باز
+            total = mt5.positions_total()
+            print(f"Total open positions: {total}")
+            return total
+
+        elif action == 'positions_get':
+            # دریافت لیست پوزیشن‌های باز با قابلیت فیلتر
+            positions = None
+            if ticket:
+                # فیلتر بر اساس تیکت پوزیشن
+                positions = mt5.positions_get(ticket=ticket)
+            elif symbol:
+                # فیلتر بر اساس نام نماد
+                positions = mt5.positions_get(symbol=symbol)
+            elif group:
+                # فیلتر بر اساس گروه نمادها
+                positions = mt5.positions_get(group=group)
+            else:
+                # دریافت تمام پوزیشن‌های باز
+                positions = mt5.positions_get()
+
+            # بررسی نتیجه و برگرداندن آن
+            if positions is None:
+                print(f"Failed to get positions, error code = {mt5.last_error()}")
+                return None
+            print(f"Found {len(positions)} open positions.")
+            # تبدیل namedtuple به لیست دیکشنری‌ها برای کاربری آسان‌تر
+            return [p._asdict() for p in positions]
+
+        # --- تاریخچه سفارشات ---
+        elif action == 'history_orders_total':
+            # دریافت تعداد کل سفارشات در بازه زمانی مشخص
+            total = mt5.history_orders_total(date_from, date_to)
+            print(f"Total history orders from {date_from} to {date_to}: {total}")
+            return total
+
+        elif action == 'history_orders_get':
+            # دریافت لیست سفارشات در تاریخچه با قابلیت فیلتر
+            orders = None
+            if ticket:
+                # فیلتر بر اساس تیکت سفارش
+                orders = mt5.history_orders_get(ticket=ticket)
+            elif position_id:
+                # فیلتر بر اساس تیکت پوزیشن مرتبط
+                orders = mt5.history_orders_get(position=position_id)
+            else:
+                # دریافت تمام سفارشات در بازه زمانی و گروه مشخص
+                orders = mt5.history_orders_get(date_from, date_to, group=group or "*")
+
+            # بررسی نتیجه و برگرداندن آن
+            if orders is None:
+                print(f"Failed to get history orders, error code = {mt5.last_error()}")
+                return None
+            print(f"Found {len(orders)} history orders.")
+            return [o._asdict() for o in orders]
+
+        # --- تاریخچه دیل‌ها (معاملات) ---
+        elif action == 'history_deals_total':
+            # دریافت تعداد کل دیل‌ها در بازه زمانی مشخص
+            total = mt5.history_deals_total(date_from, date_to)
+            print(f"Total history deals from {date_from} to {date_to}: {total}")
+            return total
+
+        elif action == 'history_deals_get':
+            # دریافت لیست دیل‌ها در تاریخچه با قابلیت فیلتر
+            deals = None
+            if ticket:
+                # فیلتر بر اساس تیکت سفارش مرتبط
+                deals = mt5.history_deals_get(ticket=ticket)
+            elif position_id:
+                # فیلتر بر اساس تیکت پوزیشن مرتبط
+                deals = mt5.history_deals_get(position=position_id)
+            else:
+                # دریافت تمام دیل‌ها در بازه زمانی و گروه مشخص
+                deals = mt5.history_deals_get(date_from, date_to, group=group or "*")
+
+            # بررسی نتیجه و برگرداندن آن
+            if deals is None:
+                print(f"Failed to get history deals, error code = {mt5.last_error()}")
+                return None
+            print(f"Found {len(deals)} history deals.")
+            return [d._asdict() for d in deals]
+
+        # اگر به هر دلیلی هیچ اکشنی اجرا نشد، None برگردان
+        return None
