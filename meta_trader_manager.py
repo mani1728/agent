@@ -561,3 +561,180 @@ class Mt5_Manager:
             "raw_data": raw_data,
             "data_frame": data_frame
         }
+
+    def trade_manager(self, action="total", symbol="EURUSD", group=None, ticket=None, request=None, order_type=None,
+                      volume=0.1, price=None, price_close=None, login=None, password=None, server=None, timeout=60000):
+        """
+        متد یکپارچه برای مدیریت سفارش‌ها و ارسال درخواست‌های معاملاتی در MetaTrader 5
+        :param action: نوع عملیات ('total', 'get', 'calc_margin', 'calc_profit', 'check', 'send')
+        :param symbol: نماد مالی (پیش‌فرض EURUSD)
+        :param group: فیلتر گروهی برای انتخاب سفارش‌ها (اختیاری)
+        :param ticket: تیکت سفارش (اختیاری)
+        :param request: ساختار درخواست معامله برای check یا send (اختیاری)
+        :param order_type: نوع سفارش (مانند ORDER_TYPE_BUY یا ORDER_TYPE_SELL)
+        :param volume: حجم معامله (پیش‌فرض 0.1)
+        :param price: قیمت باز برای محاسبه مارجین یا سود (اختیاری)
+        :param price_close: قیمت بسته برای محاسبه سود (اختیاری)
+        :param login: شماره حساب (اختیاری)
+        :param password: رمز عبور (اختیاری)
+        :param server: نام سرور (اختیاری)
+        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
+        :return: خروجی متناسب با نوع عملیات (عدد، دیکشنری، یا None)
+        """
+        # تنظیمات نمایش DataFrame
+        pd.set_option('display.max_columns', 500)
+        pd.set_option('display.width', 1500)
+
+        # استفاده از مقادیر پیش‌فرض
+        login = login or self.default_login
+        password = password or self.default_password
+        server = server or self.default_server
+
+        # اطمینان از اتصال
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server,
+                                         timeout=timeout)
+        if not success:
+            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
+            return None
+
+        # بررسی نماد برای عملیات‌هایی که نیاز به نماد دارند
+        if action in ["get", "calc_margin", "calc_profit", "check", "send"]:
+            symbol = request.get("symbol", symbol) if action == "send" and request else symbol
+            available_symbols = mt5.symbols_get()
+            if not any(s.name == symbol for s in available_symbols):
+                print(f"Symbol {symbol} not found in server")
+                print(f"Retrying with fallback symbol EURUSD")
+                symbol = "EURUSD"
+                if action == "send" and request:
+                    request["symbol"] = symbol
+                if not any(s.name == symbol for s in available_symbols):
+                    print(f"Fallback symbol EURUSD not found in server")
+                    return None
+
+            # فعال کردن نماد در MarketWatch
+            selected = mt5.symbol_select(symbol, True)
+            if not selected:
+                print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
+                return None
+
+        # عملیات orders_total
+        if action == "total":
+            orders = mt5.orders_total()
+            if orders is None:
+                print(f"Failed to get total orders, error code = {mt5.last_error()}")
+                return None
+            print(f"Total orders: {orders}")
+            return orders
+
+        # عملیات orders_get
+        elif action == "get":
+            if ticket is not None:
+                orders = mt5.orders_get(ticket=ticket)
+            elif group is not None:
+                orders = mt5.orders_get(group=group)
+            elif symbol is not None:
+                orders = mt5.orders_get(symbol=symbol)
+            else:
+                orders = mt5.orders_get()
+
+            if orders is None:
+                print(f"No orders found, error code = {mt5.last_error()}")
+                return None
+
+            print(f"Total orders: {len(orders)}")
+            for order in orders:
+                print(order)
+
+            # ایجاد DataFrame
+            if len(orders) > 0:
+                df = pd.DataFrame(list(orders), columns=orders[0]._asdict().keys())
+                df.drop(['time_done', 'time_done_msc', 'position_id', 'position_by_id', 'reason', 'volume_initial',
+                         'price_stoplimit'], axis=1, inplace=True, errors='ignore')
+                df['time_setup'] = pd.to_datetime(df['time_setup'], unit='s')
+                print("\nDisplay dataframe with orders")
+                print(df)
+                return {"raw_orders": [order._asdict() for order in orders], "orders_frame": df}
+            else:
+                print("No orders to display")
+                return {"raw_orders": [], "orders_frame": pd.DataFrame()}
+
+        # عملیات order_calc_margin
+        elif action == "calc_margin":
+            if order_type is None or price is None:
+                print("order_type and price are required for calc_margin")
+                return None
+            margin = mt5.order_calc_margin(order_type, symbol, volume, price)
+            if margin is None:
+                print(f"Failed to calculate margin for {symbol}, error code = {mt5.last_error()}")
+                return None
+            account_currency = mt5.account_info().currency if mt5.account_info() else "USD"
+            print(f"{symbol} {order_type} {volume} lot margin: {margin} {account_currency}")
+            return margin
+
+        # عملیات order_calc_profit
+        elif action == "calc_profit":
+            if order_type is None or price is None or price_close is None:
+                print("order_type, price, and price_close are required for calc_profit")
+                return None
+            profit = mt5.order_calc_profit(order_type, symbol, volume, price, price_close)
+            if profit is None:
+                print(f"Failed to calculate profit for {symbol}, error code = {mt5.last_error()}")
+                return None
+            account_currency = mt5.account_info().currency if mt5.account_info() else "USD"
+            print(f"{symbol} {order_type} {volume} lot profit: {profit} {account_currency}")
+            return profit
+
+        # عملیات order_check
+        elif action == "check":
+            if request is None:
+                print("request is required for order_check")
+                return None
+            result = mt5.order_check(request)
+            if result is None:
+                print(f"order_check failed, error code = {mt5.last_error()}")
+                return None
+            print(f"order_check result: {result}")
+            result_dict = result._asdict()
+            for field in result_dict:
+                print(f"   {field}={result_dict[field]}")
+                if field == "request":
+                    traderequest_dict = result_dict[field]._asdict()
+                    for tradereq_field in traderequest_dict:
+                        print(f"       traderequest: {tradereq_field}={traderequest_dict[tradereq_field]}")
+            return result_dict
+
+        # عملیات order_send
+        elif action == "send":
+            if request is None:
+                print("request is required for order_send")
+                return None
+            result = mt5.order_send(request)
+            if result is None:
+                print(f"order_send failed, error code = {mt5.last_error()}")
+                return None
+            print(
+                f"order_send(): {request['action']} for {symbol} {request.get('volume', 0.0)} lots at {request.get('price', 0.0)} with deviation={request.get('deviation', 0)} points")
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                print(f"order_send failed, retcode={result.retcode}")
+                result_dict = result._asdict()
+                for field in result_dict:
+                    print(f"   {field}={result_dict[field]}")
+                    if field == "request":
+                        traderequest_dict = result_dict[field]._asdict()
+                        for tradereq_field in traderequest_dict:
+                            print(f"       traderequest: {tradereq_field}={traderequest_dict[tradereq_field]}")
+                return None
+            print(f"order_send done, {result}")
+            result_dict = result._asdict()
+            for field in result_dict:
+                print(f"   {field}={result_dict[field]}")
+                if field == "request":
+                    traderequest_dict = result_dict[field]._asdict()
+                    for tradereq_field in traderequest_dict:
+                        print(f"       traderequest: {tradereq_field}={traderequest_dict[tradereq_field]}")
+            return result_dict
+
+        else:
+            print(
+                f"Invalid action: {action}. Must be 'total', 'get', 'calc_margin', 'calc_profit', 'check', or 'send'.")
+            return None
