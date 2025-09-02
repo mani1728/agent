@@ -326,3 +326,54 @@ class Mt5_Manager:
         # اگر enable=False، فقط نتیجه را برگردان
         return True
 
+    def market_book_add(self, symbol="EURUSD", login=None, password=None, server=None, timeout=60000):
+        # متد برای اشتراک در رویدادهای تغییر عمق بازار یک نماد خاص
+        login = login or self.default_login
+        password = password or self.default_password
+        server = server or self.default_server
+        # اطمینان از اتصال
+        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
+        if not success:
+            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
+            return False
+        # چک کردن وجود نماد در سرور
+        available_symbols = mt5.symbols_get()
+        if not any(s.name == symbol for s in available_symbols):
+            print(f"Symbol {symbol} not found in server")
+            print(f"Retrying with fallback symbol EURUSD")
+            symbol = "EURUSD"
+            if not any(s.name == symbol for s in available_symbols):
+                print(f"Fallback symbol EURUSD not found in server")
+                return False
+        # محدود کردن تعداد نمادهای فعال در MarketWatch
+        current_symbols = mt5.symbols_get()
+        if current_symbols and len(current_symbols) > 100:  # محدودیت اختیاری
+            print(f"Too many symbols in MarketWatch ({len(current_symbols)}), clearing MarketWatch")
+            for s in current_symbols:
+                if s.name != symbol:  # نگه داشتن نماد مورد نظر
+                    mt5.symbol_select(s.name, False)  # غیرفعال کردن نمادهای دیگر
+        # فعال کردن نماد در MarketWatch
+        selected = mt5.symbol_select(symbol, True)
+        if not selected:
+            print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
+            print(f"Retrying with fallback symbol EURUSD")
+            symbol = "EURUSD"
+            selected = mt5.symbol_select(symbol, True)
+            if not selected:
+                print(f"Failed to select fallback symbol EURUSD, error code = {mt5.last_error()}")
+                return False
+        # چک کردن پشتیبانی از عمق بازار
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info is None:
+            print(f"Failed to get symbol info for {symbol}, error code = {mt5.last_error()}")
+            return False
+        if symbol_info.ticks_bookdepth == 0:
+            print(f"Market depth not supported for {symbol} on this server")
+            return False
+        # اشتراک در رویدادهای عمق بازار
+        success = mt5.market_book_add(symbol)
+        if not success:
+            print(f"Failed to subscribe to market book for {symbol}, error code = {mt5.last_error()}")
+            return False
+        print(f"Successfully subscribed to market book for {symbol}")
+        return True
