@@ -3,7 +3,6 @@ import MetaTrader5 as mt5
 import pandas as pd
 import time
 
-
 class Mt5_Manager:
     def __init__(self):
         # مقادیر پیش‌فرض برای استفاده در صورت عدم ارسال پارامتر
@@ -22,42 +21,82 @@ class Mt5_Manager:
         self.symbol_tick_dict = None  # برای ذخیره اطلاعات تیک
         self.market_book_data = None  # برای ذخیره داده‌های عمق بازار
 
-    def initialize(self, path=None, login=None, password=None, server=None, timeout=60000, portable=False):
-        # چک کردن اینکه آیا ترمینال قبلاً متصل است
-        if mt5.terminal_info() and mt5.terminal_info().connected:
-            print("MT5 already connected, skipping initialize")
-            self.terminal_info = mt5.terminal_info()
-            self.version = mt5.version()
-            return True
-        # متد برای اتصال به MetaTrader 5 با پارامترهای داده‌شده
+    def manage_connection(self, action, path=None, login=None, password=None, server=None, timeout=60000, portable=False):
+        """
+        متد برای مدیریت اتصال به MetaTrader 5 (اتصال، لاگین، اطلاعات ترمینال، نسخه، و قطع اتصال)
+        :param action: نوع عملیات ("initialize", "login", "terminal_info", "version", "shutdown")
+        :param path: مسیر ترمینال (اختیاری)
+        :param login: شماره حساب (اختیاری)
+        :param password: رمز عبور (اختیاری)
+        :param server: نام سرور (اختیاری)
+        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
+        :param portable: حالت پرتابل (پیش‌فرض False)
+        :return: نتیجه عملیات (بسته به action)
+        """
+        # اطمینان از مقدار معتبر action
+        if action not in ["initialize", "login", "terminal_info", "version", "shutdown"]:
+            print(f"Invalid action: {action}. Must be 'initialize', 'login', 'terminal_info', 'version', or 'shutdown'.")
+            return None
+
+        # استفاده از مقادیر پیش‌فرض
         path = path or self.default_path
         login = login or self.default_login
         password = password or self.default_password
         server = server or self.default_server
-        print(f"mt5_init called: Connecting to MetaTrader 5 with path={path}, login={login}, server={server}")
-        if not mt5.initialize(path=path, login=login, password=password, server=server, timeout=timeout,
-                              portable=portable):
-            print(f"initialize() failed, error code = {mt5.last_error()}")
-            print("MT5 initialization failed")
-            return False
-        print("MT5 initialized successfully")
-        # ذخیره اطلاعات ترمینال و نسخه
-        self.terminal_info = mt5.terminal_info()
-        self.version = mt5.version()
-        print(f"Terminal info: {self.terminal_info}")
-        print(f"MT5 version: {self.version}")
-        return True
 
-    def login(self, login=None, password=None, server=None, timeout=60000):
-        # متد برای لاگین به MT5 با استفاده از initialize
-        login = login or self.default_login
-        password = password or self.default_password
-        server = server or self.default_server
-        # فراخوانی initialize برای اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
-                                  timeout=timeout)
-        # برگرداندن نتیجه و اطلاعات ترمینال/نسخه
-        return success, self.terminal_info, self.version
+        if action == "initialize":
+            # چک کردن اینکه آیا ترمینال قبلاً متصل است
+            if mt5.terminal_info() and mt5.terminal_info().connected:
+                print("MT5 already connected, skipping initialize")
+                self.terminal_info = mt5.terminal_info()
+                self.version = mt5.version()
+                return True
+            # اتصال به MetaTrader 5
+            print(f"mt5_init called: Connecting to MetaTrader 5 with path={path}, login={login}, server={server}")
+            if not mt5.initialize(path=path, login=login, password=password, server=server, timeout=timeout, portable=portable):
+                print(f"initialize() failed, error code = {mt5.last_error()}")
+                print("MT5 initialization failed")
+                return False
+            print("MT5 initialized successfully")
+            # ذخیره اطلاعات ترمینال و نسخه
+            self.terminal_info = mt5.terminal_info()
+            self.version = mt5.version()
+            print(f"Terminal info: {self.terminal_info}")
+            print(f"MT5 version: {self.version}")
+            return True
+
+        elif action == "login":
+            # لاگین با استفاده از initialize
+            success = self.manage_connection(action="initialize", path=path, login=login, password=password, server=server, timeout=timeout, portable=portable)
+            return success, self.terminal_info, self.version
+
+        elif action == "terminal_info":
+            # دریافت اطلاعات ترمینال
+            terminal_info = mt5.terminal_info()
+            if terminal_info is None:
+                print(f"Failed to get terminal info, error code = {mt5.last_error()}")
+                return None
+            self.terminal_info = terminal_info
+            print(f"Terminal info: {self.terminal_info}")
+            return self.terminal_info._asdict() if self.terminal_info else None
+
+        elif action == "version":
+            # دریافت نسخه MT5
+            version = mt5.version()
+            if version is None:
+                print(f"Failed to get version, error code = {mt5.last_error()}")
+                return None
+            self.version = version
+            print(f"MT5 version: {self.version}")
+            return self.version
+
+        elif action == "shutdown":
+            # قطع اتصال از MetaTrader 5
+            mt5.shutdown()
+            print("MT5 connection shut down")
+            self.terminal_info = None
+            self.version = None
+            return True
 
     def account_info(self, login=None, password=None, server=None, timeout=60000):
         # متد برای گرفتن اطلاعات حساب
@@ -65,7 +104,7 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # اطمینان از اتصال
-        success, terminal_info, version = self.login(login=login, password=password, server=server, timeout=timeout)
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
@@ -94,8 +133,7 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
-                                  timeout=timeout)
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
@@ -114,8 +152,7 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
-                                  timeout=timeout)
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
@@ -157,8 +194,7 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
-                                  timeout=timeout)
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
@@ -218,8 +254,7 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
-                                  timeout=timeout)
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
@@ -278,8 +313,7 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
-                                  timeout=timeout)
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return False
@@ -321,8 +355,7 @@ class Mt5_Manager:
             self.symbol_info_dict = symbol_info._asdict()
             # چاپ اطلاعات
             print(f"Symbol info for {symbol}: {symbol_info}")
-            print(
-                f"{symbol}: currency_base = {symbol_info.currency_base}, currency_profit = {symbol_info.currency_profit}, currency_margin = {symbol_info.currency_margin}")
+            print(f"{symbol}: currency_base = {symbol_info.currency_base}, currency_profit = {symbol_info.currency_profit}, currency_margin = {symbol_info.currency_margin}")
             print()
             print(f"Show symbol_info(\"{symbol}\")._asdict():")
             for prop in self.symbol_info_dict:
@@ -358,8 +391,7 @@ class Mt5_Manager:
         server = server or self.default_server
 
         # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
-                                  timeout=timeout)
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None if action == "get" else False
