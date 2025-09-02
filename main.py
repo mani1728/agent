@@ -2,6 +2,8 @@
 from confluent_kafka import Consumer, KafkaException
 import json
 from meta_trader_manager import Mt5_Manager
+import MetaTrader5 as mt5
+import datetime
 
 # تنظیمات استاتیک
 KAFKA_SERVERS = "192.168.1.254:9092"  # آدرس سرور Kafka
@@ -70,39 +72,35 @@ class KafkaListener:
                 print("Kafka consumer closed.")
 
     def process_message(self, class_name, value):
-        # پردازش پیام: پیدا کردن کلاس و فراخوانی متدها
         try:
-            # پاکسازی value: تبدیل نقل‌قول‌های تک به دوتایی
             cleaned_value = value.replace("'", '"')
             print(f"Cleaned value: {cleaned_value}")
-            # پارس value به لیست دستورات
             value_list = json.loads(cleaned_value)
-            # چک کردن اینکه value_list یک لیست است
             if not isinstance(value_list, list):
-                value_list = [value_list]  # تبدیل به لیست تک‌عنصری
-            # پیدا کردن کلاس از CLASS_MAP
+                value_list = [value_list]
             if class_name not in CLASS_MAP:
                 print(f"Class '{class_name}' not found in CLASS_MAP")
                 return
             cls = CLASS_MAP[class_name]
-            # ایجاد نمونه از کلاس
             instance = cls()
-            # پردازش هر دستور در لیست
             for command in value_list:
                 method_name = command.get("method")
-                params = command.get("params", {})  # پارامترها می‌تونن خالی باشن
-                # چک کردن وجود متد
+                params = command.get("params", {})
+                # تبدیل timeframe به مقدار مناسب
+                if "timeframe" in params and isinstance(params["timeframe"], str):
+                    params["timeframe"] = getattr(mt5, params["timeframe"], mt5.TIMEFRAME_H4)
+                # تبدیل date_from به datetime
+                if "date_from" in params and isinstance(params["date_from"], str):
+                    params["date_from"] = datetime.datetime.fromisoformat(params["date_from"])
                 if not method_name or not hasattr(instance, method_name):
                     print(f"Method '{method_name}' not found in class '{class_name}'")
                     print(f"Available methods: {dir(instance)}")
                     continue
                 method = getattr(instance, method_name)
-                # فراخوانی متد با پارامترها
                 try:
                     print(f"Calling {class_name}.{method_name} with params: {params}")
-                    result = method(**params)  # ذخیره نتیجه متد
+                    result = method(**params)
                     print(f"Result of {method_name}: {result}")
-                    # اگر متد login باشه، terminal_info و version رو جدا چاپ کن
                     if method_name == "login":
                         success, terminal_info, version = result
                         print(f"Stored terminal_info: {terminal_info}")
