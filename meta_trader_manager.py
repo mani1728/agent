@@ -786,12 +786,15 @@ class Mt5_Manager:
 
         # تنظیم تاریخ‌های پیش‌فرض برای درخواست‌های تاریخچه در صورت عدم ارسال
         if action.startswith('history'):
+            # --- این بخش را اصلاح کنید ---
+            timezone = pytz.timezone("Etc/UTC")  # منطقه زمانی را تعریف کن
             if date_from is None:
-                # اگر تاریخ شروع مشخص نشده بود، ۳۰ روز قبل را در نظر بگیر
-                date_from = datetime.datetime.now() - datetime.timedelta(days=30)
+                # اگر تاریخ شروع مشخص نشده بود، ۳۰ روز قبل را در نظر بگیر (آگاه از منطقه زمانی)
+                date_from = datetime.datetime.now(timezone) - datetime.timedelta(days=30)
             if date_to is None:
-                # اگر تاریخ پایان مشخص نشده بود، زمان حال را در نظر بگیر
-                date_to = datetime.datetime.now()
+                # اگر تاریخ پایان مشخص نشده بود، زمان حال را در نظر بگیر (آگاه از منطقه زمانی)
+                date_to = datetime.datetime.now(timezone)
+            # -------------------------
 
         # --- بخش ۲: اجرای اکشن‌ها ---
 
