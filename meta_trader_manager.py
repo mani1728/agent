@@ -690,3 +690,96 @@ class Mt5_Manager:
             "rates_frame": rates_frame
         }
 
+    def copy_ticks_from(self, symbol="EURUSD", date_from=None, count=100000, flags=mt5.COPY_TICKS_ALL, login=None,
+                        password=None, server=None, timeout=60000):
+        """
+        متد برای دریافت تیک‌ها از MetaTrader 5 از تاریخ مشخص
+        :param symbol: نماد مالی (پیش‌فرض EURUSD)
+        :param date_from: تاریخ شروع (اختیاری، فرمت datetime)
+        :param count: تعداد تیک‌های درخواستی (پیش‌فرض 100000)
+        :param flags: نوع تیک‌های درخواستی (پیش‌فرض COPY_TICKS_ALL)
+        :param login: شماره حساب (اختیاری)
+        :param password: رمز عبور (اختیاری)
+        :param server: نام سرور (اختیاری)
+        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
+        :return: دیکشنری حاوی داده‌های خام و DataFrame
+        """
+        # تنظیمات نمایش DataFrame
+        pd.set_option('display.max_columns', 500)
+        pd.set_option('display.width', 1500)
+
+        # استفاده از مقادیر پیش‌فرض
+        login = login or self.default_login
+        password = password or self.default_password
+        server = server or self.default_server
+
+        # تنظیم تاریخ پیش‌فرض اگر date_from داده نشده باشد
+        timezone = pytz.timezone("Etc/UTC")
+        if date_from is None:
+            date_from = datetime.datetime(2020, 1, 10, tzinfo=timezone)
+
+        # اطمینان از اتصال
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server,
+                                         timeout=timeout)
+        if not success:
+            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
+            return None
+
+        # چک کردن وجود نماد در سرور
+        available_symbols = mt5.symbols_get()
+        if not any(s.name == symbol for s in available_symbols):
+            print(f"Symbol {symbol} not found in server")
+            print(f"Retrying with fallback symbol EURUSD")
+            symbol = "EURUSD"
+            if not any(s.name == symbol for s in available_symbols):
+                print(f"Fallback symbol EURUSD not found in server")
+                return None
+
+        # فعال کردن نماد در MarketWatch
+        selected = mt5.symbol_select(symbol, True)
+        if not selected:
+            print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
+            return None
+
+        # دریافت تیک‌ها
+        ticks = mt5.copy_ticks_from(symbol, date_from, count, flags)
+        if ticks is None:
+            print(f"Failed to get ticks for {symbol}, error code = {mt5.last_error()}")
+            return None
+
+        print(f"Ticks received: {len(ticks)}")
+
+        # نمایش داده‌های خام (حداکثر 10 ردیف)
+        print("Display obtained ticks 'as is'")
+        counter = 0
+        for tick in ticks:
+            counter += 1
+            if counter <= 10:
+                print(tick)
+
+        # ایجاد DataFrame از داده‌های دریافت‌شده
+        ticks_frame = pd.DataFrame(ticks)
+        # تبدیل زمان از ثانیه به فرمت datetime
+        ticks_frame['time'] = pd.to_datetime(ticks_frame['time'], unit='s')
+
+        # نمایش DataFrame (حداکثر 10 ردیف)
+        print("\nDisplay dataframe with ticks")
+        print(ticks_frame.head(10))
+
+        # تبدیل داده‌های خام به لیست دیکشنری‌ها
+        raw_ticks = [
+            {
+                'time': tick['time'],
+                'bid': tick['bid'],
+                'ask': tick['ask'],
+                'last': tick['last'],
+                'flags': tick['flags']
+            } for tick in ticks
+        ]
+
+        # برگرداندن دیکشنری حاوی داده‌های خام و DataFrame
+        return {
+            "raw_ticks": raw_ticks,
+            "ticks_frame": ticks_frame
+        }
+
