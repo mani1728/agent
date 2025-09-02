@@ -599,13 +599,13 @@ class Mt5_Manager:
 
         # بررسی نماد برای عملیات‌هایی که نیاز به نماد دارند
         if action in ["get", "calc_margin", "calc_profit", "check", "send"]:
-            symbol = request.get("symbol", symbol) if action == "send" and request else symbol
+            symbol = request.get("symbol", symbol) if action in ["send", "check"] and request else symbol
             available_symbols = mt5.symbols_get()
             if not any(s.name == symbol for s in available_symbols):
                 print(f"Symbol {symbol} not found in server")
                 print(f"Retrying with fallback symbol EURUSD")
                 symbol = "EURUSD"
-                if action == "send" and request:
+                if action in ["send", "check"] and request:
                     request["symbol"] = symbol
                 if not any(s.name == symbol for s in available_symbols):
                     print(f"Fallback symbol EURUSD not found in server")
@@ -616,6 +616,44 @@ class Mt5_Manager:
             if not selected:
                 print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
                 return None
+
+            # بررسی اطلاعات نماد برای عملیات send و check
+            if action in ["send", "check"] and request:
+                symbol_info = mt5.symbol_info(symbol)
+                if symbol_info is None:
+                    print(f"Failed to get symbol info for {symbol}, error code = {mt5.last_error()}")
+                    return None
+                # بررسی نوع پر کردن مجاز
+                filling_mode = symbol_info.filling_mode
+                requested_filling = request.get("type_filling", mt5.ORDER_FILLING_FOK)
+                if not (filling_mode & requested_filling):
+                    print(
+                        f"Requested filling mode {requested_filling} not supported for {symbol}, filling_mode={filling_mode}")
+                    if filling_mode & mt5.ORDER_FILLING_FOK:
+                        request["type_filling"] = mt5.ORDER_FILLING_FOK
+                        print(f"Falling back to ORDER_FILLING_FOK")
+                    elif filling_mode & mt5.ORDER_FILLING_IOC:
+                        request["type_filling"] = mt5.ORDER_FILLING_IOC
+                        print(f"Falling back to ORDER_FILLING_IOC")
+                    else:
+                        print(f"No supported filling mode for {symbol}, filling_mode={filling_mode}")
+                        return None
+                # بررسی نوع اجرا (trade_exemode)
+                try:
+                    trade_exemode = symbol_info.trade_exemode
+                except AttributeError:
+                    print(f"trade_exemode not found in symbol_info, assuming Market Execution")
+                    trade_exemode = mt5.SYMBOL_TRADE_EXEMODE_MARKET
+                # اگر نوع اجرا Market Execution باشد، فیلد price را حذف کنید
+                if trade_exemode == mt5.SYMBOL_TRADE_EXEMODE_MARKET and request["action"] == mt5.TRADE_ACTION_DEAL:
+                    if "price" in request:
+                        del request["price"]
+                    symbol_tick = mt5.symbol_info_tick(symbol)
+                    if symbol_tick is None:
+                        print(f"Failed to get tick data for {symbol}, error code = {mt5.last_error()}")
+                        return None
+                    request["price"] = symbol_tick.ask if request["type"] == mt5.ORDER_TYPE_BUY else symbol_tick.bid
+                    print(f"Set price to {request['price']} for Market Execution")
 
         # عملیات orders_total
         if action == "total":
@@ -738,3 +776,4 @@ class Mt5_Manager:
             print(
                 f"Invalid action: {action}. Must be 'total', 'get', 'calc_margin', 'calc_profit', 'check', or 'send'.")
             return None
+
