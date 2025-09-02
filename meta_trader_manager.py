@@ -263,3 +263,66 @@ class Mt5_Manager:
             print(f"  {prop}={self.symbol_tick_dict[prop]}")
         # برگرداندن اطلاعات تیک
         return self.symbol_tick_dict
+
+    def symbol_select(self, symbol="EURUSD", enable=True, login=None, password=None, server=None, timeout=60000):
+        # متد برای فعال یا غیرفعال کردن یک نماد در MarketWatch
+        login = login or self.default_login
+        password = password or self.default_password
+        server = server or self.default_server
+        # اطمینان از اتصال
+        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
+        if not success:
+            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
+            return False
+        # چک کردن وجود نماد در سرور
+        available_symbols = mt5.symbols_get()
+        if not any(s.name == symbol for s in available_symbols):
+            print(f"Symbol {symbol} not found in server")
+            print(f"Retrying with fallback symbol EURUSD")
+            symbol = "EURUSD"
+            if not any(s.name == symbol for s in available_symbols):
+                print(f"Fallback symbol EURUSD not found in server")
+                return False
+        # محدود کردن تعداد نمادهای فعال در MarketWatch
+        current_symbols = mt5.symbols_get()
+        if current_symbols and len(current_symbols) > 100:  # محدودیت اختیاری
+            print(f"Too many symbols in MarketWatch ({len(current_symbols)}), clearing MarketWatch")
+            for s in current_symbols:
+                if s.name != symbol:  # نگه داشتن نماد مورد نظر
+                    mt5.symbol_select(s.name, False)  # غیرفعال کردن نمادهای دیگر
+        # فعال یا غیرفعال کردن نماد در MarketWatch
+        selected = mt5.symbol_select(symbol, enable)
+        if not selected:
+            print(f"Failed to select {symbol} with enable={enable}, error code = {mt5.last_error()}")
+            return False
+        # اگر enable=True، اطلاعات نماد را دریافت و ذخیره کن
+        if enable:
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is None:
+                print(f"Failed to get symbol info for {symbol}, error code = {mt5.last_error()}")
+                return False
+            # چک کردن وضعیت بازار
+            if symbol_info.bid == 0.0 and symbol_info.ask == 0.0:
+                print(f"No price data for {symbol}, market may be closed or data not updated")
+                time.sleep(1)  # تاخیر 1 ثانیه
+                symbol_info = mt5.symbol_info(symbol)
+                if symbol_info is None or (symbol_info.bid == 0.0 and symbol_info.ask == 0.0):
+                    print(f"Still no price data for {symbol}, skipping")
+            # ذخیره اطلاعات نماد
+            self.symbol_info_dict = symbol_info._asdict()
+            # چاپ اطلاعات
+            print(f"Symbol info for {symbol}: {symbol_info}")
+            print(f"{symbol}: currency_base = {symbol_info.currency_base}, currency_profit = {symbol_info.currency_profit}, currency_margin = {symbol_info.currency_margin}")
+            print()
+            print(f"Show symbol_info(\"{symbol}\")._asdict():")
+            for prop in self.symbol_info_dict:
+                print(f"  {prop}={self.symbol_info_dict[prop]}")
+            print()
+            # تبدیل به DataFrame
+            df = pd.DataFrame(list(self.symbol_info_dict.items()), columns=['property', 'value'])
+            print("symbol_info_dict() as dataframe:")
+            print(df)
+            return True, self.symbol_info_dict
+        # اگر enable=False، فقط نتیجه را برگردان
+        return True
+
