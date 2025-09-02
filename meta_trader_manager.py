@@ -444,3 +444,31 @@ class Mt5_Manager:
             print(f"No market book data available for {symbol}")
         # برگرداندن داده‌های عمق بازار
         return self.market_book_data
+
+    def market_book_release(self, symbol="EURUSD", login=None, password=None, server=None, timeout=60000):
+        # متد برای لغو اشتراک از رویدادهای تغییر عمق بازار یک نماد خاص
+        login = login or self.default_login
+        password = password or self.default_password
+        server = server or self.default_server
+        # اطمینان از اتصال
+        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
+                                  timeout=timeout)
+        if not success:
+            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
+            return False
+        # چک کردن وجود نماد در سرور
+        available_symbols = mt5.symbols_get()
+        if not any(s.name == symbol for s in available_symbols):
+            print(f"Symbol {symbol} not found in server")
+            print(f"Retrying with fallback symbol EURUSD")
+            symbol = "EURUSD"
+            if not any(s.name == symbol for s in available_symbols):
+                print(f"Fallback symbol EURUSD not found in server")
+                return False
+        # لغو اشتراک از رویدادهای عمق بازار
+        success = mt5.market_book_release(symbol)
+        if not success:
+            print(f"Failed to release market book for {symbol}, error code = {mt5.last_error()}")
+            return False
+        print(f"Successfully released market book for {symbol}")
+        return True
