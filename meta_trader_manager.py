@@ -511,3 +511,88 @@ class Mt5_Manager:
             "raw_rates": raw_rates,
             "rates_frame": rates_frame
         }
+
+    def copy_rates_from_pos(self, symbol="EURUSD", timeframe=mt5.TIMEFRAME_H4, start_pos=0, count=10, login=None, password=None, server=None, timeout=60000):
+        """
+        متد برای دریافت داده‌های قیمتی (نرخ‌ها) از MetaTrader 5 با استفاده از ایندکس شروع
+        :param symbol: نماد مالی (پیش‌فرض EURUSD)
+        :param timeframe: تایم‌فریم (پیش‌فرض H4)
+        :param start_pos: ایندکس شروع کندل (0 برای کندل فعلی، پیش‌فرض 0)
+        :param count: تعداد کندل‌ها برای دریافت (پیش‌فرض 10)
+        :param login: شماره حساب (اختیاری)
+        :param password: رمز عبور (اختیاری)
+        :param server: نام سرور (اختیاری)
+        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
+        :return: دیکشنری حاوی داده‌های خام و DataFrame
+        """
+        # تنظیمات نمایش DataFrame
+        pd.set_option('display.max_columns', 500)
+        pd.set_option('display.width', 1500)
+
+        # استفاده از مقادیر پیش‌فرض
+        login = login or self.default_login
+        password = password or self.default_password
+        server = server or self.default_server
+
+        # اطمینان از اتصال
+        success = self.manage_connection(action="initialize", login=login, password=password, server=server, timeout=timeout)
+        if not success:
+            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
+            return None
+
+        # چک کردن وجود نماد در سرور
+        available_symbols = mt5.symbols_get()
+        if not any(s.name == symbol for s in available_symbols):
+            print(f"Symbol {symbol} not found in server")
+            print(f"Retrying with fallback symbol EURUSD")
+            symbol = "EURUSD"
+            if not any(s.name == symbol for s in available_symbols):
+                print(f"Fallback symbol EURUSD not found in server")
+                return None
+
+        # فعال کردن نماد در MarketWatch
+        selected = mt5.symbol_select(symbol, True)
+        if not selected:
+            print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
+            return None
+
+        # دریافت داده‌های قیمتی
+        rates = mt5.copy_rates_from_pos(symbol, timeframe, start_pos, count)
+        if rates is None:
+            print(f"Failed to get rates for {symbol}, error code = {mt5.last_error()}")
+            return None
+
+        # نمایش داده‌های خام
+        print("Display obtained data 'as is'")
+        for rate in rates:
+            print(rate)
+
+        # ایجاد DataFrame از داده‌های دریافت‌شده
+        rates_frame = pd.DataFrame(rates)
+        # تبدیل زمان از ثانیه به فرمت datetime
+        rates_frame['time'] = pd.to_datetime(rates_frame['time'], unit='s')
+
+        # نمایش DataFrame
+        print("\nDisplay dataframe with data")
+        print(rates_frame)
+
+        # تبدیل داده‌های خام به لیست دیکشنری‌ها
+        raw_rates = [
+            {
+                'time': rate['time'],
+                'open': rate['open'],
+                'high': rate['high'],
+                'low': rate['low'],
+                'close': rate['close'],
+                'tick_volume': rate['tick_volume'],
+                'spread': rate['spread'],
+                'real_volume': rate['real_volume']
+            } for rate in rates
+        ]
+
+        # برگرداندن دیکشنری حاوی داده‌های خام و DataFrame
+        return {
+            "raw_rates": raw_rates,
+            "rates_frame": rates_frame
+        }
+
