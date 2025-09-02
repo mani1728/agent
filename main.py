@@ -1,3 +1,4 @@
+#C:\Users\Administrator\Desktop\agent_low\agent\main.py
 # ساده‌ترین کد برای گوش دادن به Kafka و فراخوانی متدهای کلاس
 from confluent_kafka import Consumer, KafkaException
 import json
@@ -115,7 +116,8 @@ class KafkaListener:
                     if "type_time" in request and isinstance(request["type_time"], str):
                         request["type_time"] = getattr(mt5, request["type_time"], mt5.ORDER_TIME_GTC)
                     if "type_filling" in request and isinstance(request["type_filling"], str):
-                        request["type_filling"] = getattr(mt5, request["type_filling"], mt5.ORDER_FILLING_RETURN)
+                        # مقدار پیش‌فرض را به IOC تغییر می‌دهیم که رایج‌تر است
+                        request["type_filling"] = getattr(mt5, request["type_filling"], mt5.ORDER_FILLING_IOC)
                 if not method_name or not hasattr(instance, method_name):
                     print(f"Method '{method_name}' not found in class '{class_name}'")
                     print(f"Available methods: {dir(instance)}")
