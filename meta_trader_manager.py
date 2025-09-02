@@ -3,6 +3,7 @@ import MetaTrader5 as mt5
 import pandas as pd
 import time
 
+
 class Mt5_Manager:
     def __init__(self):
         # مقادیر پیش‌فرض برای استفاده در صورت عدم ارسال پارامتر
@@ -34,7 +35,8 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         print(f"mt5_init called: Connecting to MetaTrader 5 with path={path}, login={login}, server={server}")
-        if not mt5.initialize(path=path, login=login, password=password, server=server, timeout=timeout, portable=portable):
+        if not mt5.initialize(path=path, login=login, password=password, server=server, timeout=timeout,
+                              portable=portable):
             print(f"initialize() failed, error code = {mt5.last_error()}")
             print("MT5 initialization failed")
             return False
@@ -52,7 +54,8 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # فراخوانی initialize برای اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
+        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
+                                  timeout=timeout)
         # برگرداندن نتیجه و اطلاعات ترمینال/نسخه
         return success, self.terminal_info, self.version
 
@@ -91,7 +94,8 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
+        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
+                                  timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
@@ -110,7 +114,8 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
+        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
+                                  timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
@@ -152,7 +157,8 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
+        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
+                                  timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
@@ -212,7 +218,8 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
+        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
+                                  timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return None
@@ -271,7 +278,8 @@ class Mt5_Manager:
         password = password or self.default_password
         server = server or self.default_server
         # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
+        success = self.initialize(path=self.default_path, login=login, password=password, server=server,
+                                  timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
             return False
@@ -313,7 +321,8 @@ class Mt5_Manager:
             self.symbol_info_dict = symbol_info._asdict()
             # چاپ اطلاعات
             print(f"Symbol info for {symbol}: {symbol_info}")
-            print(f"{symbol}: currency_base = {symbol_info.currency_base}, currency_profit = {symbol_info.currency_profit}, currency_margin = {symbol_info.currency_margin}")
+            print(
+                f"{symbol}: currency_base = {symbol_info.currency_base}, currency_profit = {symbol_info.currency_profit}, currency_margin = {symbol_info.currency_margin}")
             print()
             print(f"Show symbol_info(\"{symbol}\")._asdict():")
             for prop in self.symbol_info_dict:
@@ -327,135 +336,34 @@ class Mt5_Manager:
         # اگر enable=False، فقط نتیجه را برگردان
         return True
 
-    def market_book_add(self, symbol="EURUSD", login=None, password=None, server=None, timeout=60000):
-        # متد برای اشتراک در رویدادهای تغییر عمق بازار یک نماد خاص
-        login = login or self.default_login
-        password = password or self.default_password
-        server = server or self.default_server
-        # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
-        if not success:
-            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
-            return False
-        # چک کردن وجود نماد در سرور
-        available_symbols = mt5.symbols_get()
-        if not any(s.name == symbol for s in available_symbols):
-            print(f"Symbol {symbol} not found in server")
-            print(f"Retrying with fallback symbol EURUSD")
-            symbol = "EURUSD"
-            if not any(s.name == symbol for s in available_symbols):
-                print(f"Fallback symbol EURUSD not found in server")
-                return False
-        # محدود کردن تعداد نمادهای فعال در MarketWatch
-        current_symbols = mt5.symbols_get()
-        if current_symbols and len(current_symbols) > 100:  # محدودیت اختیاری
-            print(f"Too many symbols in MarketWatch ({len(current_symbols)}), clearing MarketWatch")
-            for s in current_symbols:
-                if s.name != symbol:  # نگه داشتن نماد مورد نظر
-                    mt5.symbol_select(s.name, False)  # غیرفعال کردن نمادهای دیگر
-        # فعال کردن نماد در MarketWatch
-        selected = mt5.symbol_select(symbol, True)
-        if not selected:
-            print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
-            print(f"Retrying with fallback symbol EURUSD")
-            symbol = "EURUSD"
-            selected = mt5.symbol_select(symbol, True)
-            if not selected:
-                print(f"Failed to select fallback symbol EURUSD, error code = {mt5.last_error()}")
-                return False
-        # چک کردن پشتیبانی از عمق بازار
-        symbol_info = mt5.symbol_info(symbol)
-        if symbol_info is None:
-            print(f"Failed to get symbol info for {symbol}, error code = {mt5.last_error()}")
-            return False
-        if symbol_info.ticks_bookdepth == 0:
-            print(f"Market depth not supported for {symbol} on this server")
-            return False
-        # اشتراک در رویدادهای عمق بازار
-        success = mt5.market_book_add(symbol)
-        if not success:
-            print(f"Failed to subscribe to market book for {symbol}, error code = {mt5.last_error()}")
-            return False
-        print(f"Successfully subscribed to market book for {symbol}")
-        return True
+    def manage_market_book(self, action, symbol="EURUSD", login=None, password=None, server=None, timeout=60000):
+        """
+        متد برای مدیریت عملیات عمق بازار (اشتراک، دریافت داده، لغو اشتراک)
+        :param action: نوع عملیات ("add", "get", "release")
+        :param symbol: نماد مالی (پیش‌فرض EURUSD)
+        :param login: شماره حساب (اختیاری)
+        :param password: رمز عبور (اختیاری)
+        :param server: نام سرور (اختیاری)
+        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
+        :return: نتیجه عملیات (بسته به action)
+        """
+        # اطمینان از مقدار معتبر action
+        if action not in ["add", "get", "release"]:
+            print(f"Invalid action: {action}. Must be 'add', 'get', or 'release'.")
+            return None
 
-    def market_book_get(self, symbol="EURUSD", login=None, password=None, server=None, timeout=60000):
-        # متد برای گرفتن داده‌های عمق بازار یک نماد خاص
+        # استفاده از مقادیر پیش‌فرض
         login = login or self.default_login
         password = password or self.default_password
         server = server or self.default_server
-        # اطمینان از اتصال
-        success = self.initialize(path=self.default_path, login=login, password=password, server=server, timeout=timeout)
-        if not success:
-            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
-            return None
-        # چک کردن وجود نماد در سرور
-        available_symbols = mt5.symbols_get()
-        if not any(s.name == symbol for s in available_symbols):
-            print(f"Symbol {symbol} not found in server")
-            print(f"Retrying with fallback symbol EURUSD")
-            symbol = "EURUSD"
-            if not any(s.name == symbol for s in available_symbols):
-                print(f"Fallback symbol EURUSD not found in server")
-                return None
-        # محدود کردن تعداد نمادهای فعال در MarketWatch
-        current_symbols = mt5.symbols_get()
-        if current_symbols and len(current_symbols) > 100:  # محدودیت اختیاری
-            print(f"Too many symbols in MarketWatch ({len(current_symbols)}), clearing MarketWatch")
-            for s in current_symbols:
-                if s.name != symbol:  # نگه داشتن نماد مورد نظر
-                    mt5.symbol_select(s.name, False)  # غیرفعال کردن نمادهای دیگر
-        # فعال کردن نماد در MarketWatch
-        selected = mt5.symbol_select(symbol, True)
-        if not selected:
-            print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
-            print(f"Retrying with fallback symbol EURUSD")
-            symbol = "EURUSD"
-            selected = mt5.symbol_select(symbol, True)
-            if not selected:
-                print(f"Failed to select fallback symbol EURUSD, error code = {mt5.last_error()}")
-                return None
-        # چک کردن پشتیبانی از عمق بازار
-        symbol_info = mt5.symbol_info(symbol)
-        if symbol_info is None:
-            print(f"Failed to get symbol info for {symbol}, error code = {mt5.last_error()}")
-            return None
-        if symbol_info.ticks_bookdepth == 0:
-            print(f"Market depth not supported for {symbol} on this server")
-            return None
-        # اشتراک در رویدادهای عمق بازار
-        if not self.market_book_add(symbol):
-            print(f"Failed to subscribe to market book for {symbol}, error code = {mt5.last_error()}")
-            return None
-        # گرفتن داده‌های عمق بازار
-        book_data = mt5.market_book_get(symbol)
-        if book_data is None:
-            print(f"Failed to get market book data for {symbol}, error code = {mt5.last_error()}")
-            return None
-        # ذخیره داده‌های عمق بازار
-        self.market_book_data = [item._asdict() for item in book_data]  # تبدیل به لیست دیکشنری‌ها
-        # چاپ داده‌های عمق بازار
-        print(f"Market book data for {symbol}: {book_data}")
-        if book_data:
-            print(f"Show market_book_get(\"{symbol}\")._asdict():")
-            for item in self.market_book_data:
-                print(f"  Order: {item}")
-        else:
-            print(f"No market book data available for {symbol}")
-        # برگرداندن داده‌های عمق بازار
-        return self.market_book_data
 
-    def market_book_release(self, symbol="EURUSD", login=None, password=None, server=None, timeout=60000):
-        # متد برای لغو اشتراک از رویدادهای تغییر عمق بازار یک نماد خاص
-        login = login or self.default_login
-        password = password or self.default_password
-        server = server or self.default_server
         # اطمینان از اتصال
         success = self.initialize(path=self.default_path, login=login, password=password, server=server,
                                   timeout=timeout)
         if not success:
             print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
-            return False
+            return None if action == "get" else False
+
         # چک کردن وجود نماد در سرور
         available_symbols = mt5.symbols_get()
         if not any(s.name == symbol for s in available_symbols):
@@ -464,11 +372,74 @@ class Mt5_Manager:
             symbol = "EURUSD"
             if not any(s.name == symbol for s in available_symbols):
                 print(f"Fallback symbol EURUSD not found in server")
+                return None if action == "get" else False
+
+        # محدود کردن تعداد نمادهای فعال در MarketWatch
+        current_symbols = mt5.symbols_get()
+        if current_symbols and len(current_symbols) > 100:  # محدودیت اختیاری
+            print(f"Too many symbols in MarketWatch ({len(current_symbols)}), clearing MarketWatch")
+            for s in current_symbols:
+                if s.name != symbol:  # نگه داشتن نماد مورد نظر
+                    mt5.symbol_select(s.name, False)  # غیرفعال کردن نمادهای دیگر
+
+        # فعال کردن نماد در MarketWatch
+        selected = mt5.symbol_select(symbol, True)
+        if not selected:
+            print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
+            print(f"Retrying with fallback symbol EURUSD")
+            symbol = "EURUSD"
+            selected = mt5.symbol_select(symbol, True)
+            if not selected:
+                print(f"Failed to select fallback symbol EURUSD, error code = {mt5.last_error()}")
+                return None if action == "get" else False
+
+        # چک کردن پشتیبانی از عمق بازار (برای add و get)
+        if action in ["add", "get"]:
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is None:
+                print(f"Failed to get symbol info for {symbol}, error code = {mt5.last_error()}")
+                return None if action == "get" else False
+            if symbol_info.ticks_bookdepth == 0:
+                print(f"Market depth not supported for {symbol} on this server")
+                return None if action == "get" else False
+
+        # انجام عملیات بر اساس action
+        if action == "add":
+            # اشتراک در رویدادهای عمق بازار
+            success = mt5.market_book_add(symbol)
+            if not success:
+                print(f"Failed to subscribe to market book for {symbol}, error code = {mt5.last_error()}")
                 return False
-        # لغو اشتراک از رویدادهای عمق بازار
-        success = mt5.market_book_release(symbol)
-        if not success:
-            print(f"Failed to release market book for {symbol}, error code = {mt5.last_error()}")
-            return False
-        print(f"Successfully released market book for {symbol}")
-        return True
+            print(f"Successfully subscribed to market book for {symbol}")
+            return True
+
+        elif action == "get":
+            # اشتراک در عمق بازار (در صورت نیاز)
+            if not mt5.market_book_add(symbol):
+                print(f"Failed to subscribe to market book for {symbol}, error code = {mt5.last_error()}")
+                return None
+            # گرفتن داده‌های عمق بازار
+            book_data = mt5.market_book_get(symbol)
+            if book_data is None:
+                print(f"Failed to get market book data for {symbol}, error code = {mt5.last_error()}")
+                return None
+            # ذخیره داده‌های عمق بازار
+            self.market_book_data = [item._asdict() for item in book_data]  # تبدیل به لیست دیکشنری‌ها
+            # چاپ داده‌های عمق بازار
+            print(f"Market book data for {symbol}: {book_data}")
+            if book_data:
+                print(f"Show market_book_get(\"{symbol}\")._asdict():")
+                for item in self.market_book_data:
+                    print(f"  Order: {item}")
+            else:
+                print(f"No market book data available for {symbol}")
+            return self.market_book_data
+
+        elif action == "release":
+            # لغو اشتراک از رویدادهای عمق بازار
+            success = mt5.market_book_release(symbol)
+            if not success:
+                print(f"Failed to release market book for {symbol}, error code = {mt5.last_error()}")
+                return False
+            print(f"Successfully released market book for {symbol}")
+            return True
