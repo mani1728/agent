@@ -492,9 +492,22 @@ class Mt5_Manager:
         print("\nDisplay dataframe with data")
         print(rates_frame)
 
+        # تبدیل داده‌های خام به لیست دیکشنری‌ها
+        raw_rates = [
+            {
+                'time': rate['time'],
+                'open': rate['open'],
+                'high': rate['high'],
+                'low': rate['low'],
+                'close': rate['close'],
+                'tick_volume': rate['tick_volume'],
+                'spread': rate['spread'],
+                'real_volume': rate['real_volume']
+            } for rate in rates
+        ]
+
         # برگرداندن دیکشنری حاوی داده‌های خام و DataFrame
         return {
-            "raw_rates": [rate._asdict() for rate in rates],
+            "raw_rates": raw_rates,
             "rates_frame": rates_frame
         }
-
