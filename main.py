@@ -8,7 +8,7 @@ import json  # برای کار با داده‌های با فرمت JSON
 from meta_trader_manager import Mt5_Manager  # وارد کردن کلاس مدیریت متاتریدر که خودمان نوشتیم
 import MetaTrader5 as mt5  # کتابخانه رسمی برای اتصال به متاتریدر ۵
 import datetime  # برای کار با تاریخ و زمان
-
+import pytz
 # --- تنظیمات کلی و استاتیک برنامه ---
 KAFKA_SERVERS = "192.168.1.254:9092"  # آدرس سرور یا سرورهای کافکا
 TOPIC = "agent-send"  # نام تاپیکی که برنامه به آن گوش می‌دهد
@@ -146,12 +146,18 @@ class KafkaListener:
                 if "timeframe" in params and isinstance(params["timeframe"], str):
                     params["timeframe"] = getattr(mt5, params["timeframe"], mt5.TIMEFRAME_H4)
 
-                # تبدیل رشته تاریخ با فرمت ISO به آبجکت datetime
+                # منطقه زمانی استاندارد را تعریف کن
+                timezone = pytz.timezone("Etc/UTC")
+
+                # تبدیل رشته تاریخ با فرمت ISO به آبجکت datetime آگاه از منطقه زمانی
                 if "date_from" in params and isinstance(params["date_from"], str):
-                    params["date_from"] = datetime.datetime.fromisoformat(params["date_from"])
+                    # ابتدا به datetime تبدیل کرده و سپس منطقه زمانی را به آن متصل کن
+                    naive_dt = datetime.datetime.fromisoformat(params["date_from"])
+                    params["date_from"] = timezone.localize(naive_dt)
 
                 if "date_to" in params and isinstance(params["date_to"], str):
-                    params["date_to"] = datetime.datetime.fromisoformat(params["date_to"])
+                    naive_dt = datetime.datetime.fromisoformat(params["date_to"])
+                    params["date_to"] = timezone.localize(naive_dt)
 
                 # تبدیل رشته فلگ (مثلاً "COPY_TICKS_ALL") به ثابت واقعی متاتریدر
                 if "flags" in params and isinstance(params["flags"], str):
