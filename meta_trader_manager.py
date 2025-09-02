@@ -423,14 +423,20 @@ class Mt5_Manager:
         else:
             pass
 
-    def copy_rates_from(self, symbol="EURUSD", timeframe=mt5.TIMEFRAME_H4, date_from=None, count=10, login=None,
-                        password=None, server=None, timeout=60000):
+    def fetch_data(self, symbol="EURUSD", data_type="rates", method="from", timeframe=mt5.TIMEFRAME_H4, date_from=None,
+                   date_to=None, start_pos=0, count=None, flags=mt5.COPY_TICKS_ALL, login=None, password=None,
+                   server=None, timeout=60000):
         """
-        متد برای دریافت داده‌های قیمتی (نرخ‌ها) از MetaTrader 5
+        متد یکپارچه برای دریافت نرخ‌ها یا تیک‌ها از MetaTrader 5
         :param symbol: نماد مالی (پیش‌فرض EURUSD)
-        :param timeframe: تایم‌فریم (پیش‌فرض H4)
-        :param date_from: تاریخ شروع (اختیاری، فرمت datetime)
-        :param count: تعداد کندل‌ها برای دریافت (پیش‌فرض 10)
+        :param data_type: نوع داده ('rates' یا 'ticks')
+        :param method: روش دریافت داده ('from', 'from_pos', 'range')
+        :param timeframe: تایم‌فریم برای نرخ‌ها (پیش‌فرض H4)
+        :param date_from: تاریخ شروع (اختیاری)
+        :param date_to: تاریخ پایان برای روش range (اختیاری)
+        :param start_pos: ایندکس شروع برای روش from_pos (پیش‌فرض 0)
+        :param count: تعداد داده‌های درخواستی (پیش‌فرض 10 برای نرخ‌ها، 100000 برای تیک‌ها)
+        :param flags: نوع تیک‌ها برای روش‌های ticks (پیش‌فرض COPY_TICKS_ALL)
         :param login: شماره حساب (اختیاری)
         :param password: رمز عبور (اختیاری)
         :param server: نام سرور (اختیاری)
@@ -445,190 +451,14 @@ class Mt5_Manager:
         login = login or self.default_login
         password = password or self.default_password
         server = server or self.default_server
+        count = count or (100000 if data_type == "ticks" else 10)
 
-        # تنظیم تاریخ پیش‌فرض اگر date_from داده نشده باشد
-        if date_from is None:
-            timezone = pytz.timezone("Etc/UTC")
-            date_from = datetime.datetime(2020, 1, 10, tzinfo=timezone)
-
-        # اطمینان از اتصال
-        success = self.manage_connection(action="initialize", login=login, password=password, server=server,
-                                         timeout=timeout)
-        if not success:
-            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
-            return None
-
-        # چک کردن وجود نماد در سرور
-        available_symbols = mt5.symbols_get()
-        if not any(s.name == symbol for s in available_symbols):
-            print(f"Symbol {symbol} not found in server")
-            print(f"Retrying with fallback symbol EURUSD")
-            symbol = "EURUSD"
-            if not any(s.name == symbol for s in available_symbols):
-                print(f"Fallback symbol EURUSD not found in server")
-                return None
-
-        # فعال کردن نماد در MarketWatch
-        selected = mt5.symbol_select(symbol, True)
-        if not selected:
-            print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
-            return None
-
-        # دریافت داده‌های قیمتی
-        rates = mt5.copy_rates_from(symbol, timeframe, date_from, count)
-        if rates is None:
-            print(f"Failed to get rates for {symbol}, error code = {mt5.last_error()}")
-            return None
-
-        # نمایش داده‌های خام
-        print("Display obtained data 'as is'")
-        for rate in rates:
-            print(rate)
-
-        # ایجاد DataFrame از داده‌های دریافت‌شده
-        rates_frame = pd.DataFrame(rates)
-        # تبدیل زمان از ثانیه به فرمت datetime
-        rates_frame['time'] = pd.to_datetime(rates_frame['time'], unit='s')
-
-        # نمایش DataFrame
-        print("\nDisplay dataframe with data")
-        print(rates_frame)
-
-        # تبدیل داده‌های خام به لیست دیکشنری‌ها
-        raw_rates = [
-            {
-                'time': rate['time'],
-                'open': rate['open'],
-                'high': rate['high'],
-                'low': rate['low'],
-                'close': rate['close'],
-                'tick_volume': rate['tick_volume'],
-                'spread': rate['spread'],
-                'real_volume': rate['real_volume']
-            } for rate in rates
-        ]
-
-        # برگرداندن دیکشنری حاوی داده‌های خام و DataFrame
-        return {
-            "raw_rates": raw_rates,
-            "rates_frame": rates_frame
-        }
-
-    def copy_rates_from_pos(self, symbol="EURUSD", timeframe=mt5.TIMEFRAME_H4, start_pos=0, count=10, login=None,
-                            password=None, server=None, timeout=60000):
-        """
-        متد برای دریافت داده‌های قیمتی (نرخ‌ها) از MetaTrader 5 با استفاده از ایندکس شروع
-        :param symbol: نماد مالی (پیش‌فرض EURUSD)
-        :param timeframe: تایم‌فریم (پیش‌فرض H4)
-        :param start_pos: ایندکس شروع کندل (0 برای کندل فعلی، پیش‌فرض 0)
-        :param count: تعداد کندل‌ها برای دریافت (پیش‌فرض 10)
-        :param login: شماره حساب (اختیاری)
-        :param password: رمز عبور (اختیاری)
-        :param server: نام سرور (اختیاری)
-        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
-        :return: دیکشنری حاوی داده‌های خام و DataFrame
-        """
-        # تنظیمات نمایش DataFrame
-        pd.set_option('display.max_columns', 500)
-        pd.set_option('display.width', 1500)
-
-        # استفاده از مقادیر پیش‌فرض
-        login = login or self.default_login
-        password = password or self.default_password
-        server = server or self.default_server
-
-        # اطمینان از اتصال
-        success = self.manage_connection(action="initialize", login=login, password=password, server=server,
-                                         timeout=timeout)
-        if not success:
-            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
-            return None
-
-        # چک کردن وجود نماد در سرور
-        available_symbols = mt5.symbols_get()
-        if not any(s.name == symbol for s in available_symbols):
-            print(f"Symbol {symbol} not found in server")
-            print(f"Retrying with fallback symbol EURUSD")
-            symbol = "EURUSD"
-            if not any(s.name == symbol for s in available_symbols):
-                print(f"Fallback symbol EURUSD not found in server")
-                return None
-
-        # فعال کردن نماد در MarketWatch
-        selected = mt5.symbol_select(symbol, True)
-        if not selected:
-            print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
-            return None
-
-        # دریافت داده‌های قیمتی
-        rates = mt5.copy_rates_from_pos(symbol, timeframe, start_pos, count)
-        if rates is None:
-            print(f"Failed to get rates for {symbol}, error code = {mt5.last_error()}")
-            return None
-
-        # نمایش داده‌های خام
-        print("Display obtained data 'as is'")
-        for rate in rates:
-            print(rate)
-
-        # ایجاد DataFrame از داده‌های دریافت‌شده
-        rates_frame = pd.DataFrame(rates)
-        # تبدیل زمان از ثانیه به فرمت datetime
-        rates_frame['time'] = pd.to_datetime(rates_frame['time'], unit='s')
-
-        # نمایش DataFrame
-        print("\nDisplay dataframe with data")
-        print(rates_frame)
-
-        # تبدیل داده‌های خام به لیست دیکشنری‌ها
-        raw_rates = [
-            {
-                'time': rate['time'],
-                'open': rate['open'],
-                'high': rate['high'],
-                'low': rate['low'],
-                'close': rate['close'],
-                'tick_volume': rate['tick_volume'],
-                'spread': rate['spread'],
-                'real_volume': rate['real_volume']
-            } for rate in rates
-        ]
-
-        # برگرداندن دیکشنری حاوی داده‌های خام و DataFrame
-        return {
-            "raw_rates": raw_rates,
-            "rates_frame": rates_frame
-        }
-
-    def copy_rates_range(self, symbol="EURUSD", timeframe=mt5.TIMEFRAME_H4, date_from=None, date_to=None, login=None,
-                         password=None, server=None, timeout=60000):
-        """
-        متد برای دریافت داده‌های قیمتی (نرخ‌ها) از MetaTrader 5 در بازه زمانی مشخص
-        :param symbol: نماد مالی (پیش‌فرض EURUSD)
-        :param timeframe: تایم‌فریم (پیش‌فرض H4)
-        :param date_from: تاریخ شروع (اختیاری، فرمت datetime)
-        :param date_to: تاریخ پایان (اختیاری، فرمت datetime)
-        :param login: شماره حساب (اختیاری)
-        :param password: رمز عبور (اختیاری)
-        :param server: نام سرور (اختیاری)
-        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
-        :return: دیکشنری حاوی داده‌های خام و DataFrame
-        """
-        # تنظیمات نمایش DataFrame
-        pd.set_option('display.max_columns', 500)
-        pd.set_option('display.width', 1500)
-
-        # استفاده از مقادیر پیش‌فرض
-        login = login or self.default_login
-        password = password or self.default_password
-        server = server or self.default_server
-
-        # تنظیم تاریخ‌های پیش‌فرض اگر date_from یا date_to داده نشده باشند
+        # تنظیم تاریخ‌های پیش‌فرض
         timezone = pytz.timezone("Etc/UTC")
         if date_from is None:
             date_from = datetime.datetime(2020, 1, 10, tzinfo=timezone)
-        if date_to is None:
-            date_to = datetime.datetime(2020, 1, 11, hour=13, tzinfo=timezone)
+        if method == "range" and date_to is None:
+            date_to = datetime.datetime(2020, 1, 11, hour=13 if data_type == "rates" else 0, tzinfo=timezone)
 
         # اطمینان از اتصال
         success = self.manage_connection(action="initialize", login=login, password=password, server=server,
@@ -653,233 +483,81 @@ class Mt5_Manager:
             print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
             return None
 
-        # دریافت داده‌های قیمتی
-        rates = mt5.copy_rates_range(symbol, timeframe, date_from, date_to)
-        if rates is None:
-            print(f"Failed to get rates for {symbol}, error code = {mt5.last_error()}")
+        # دریافت داده‌ها
+        data = None
+        if data_type == "rates":
+            if method == "from":
+                data = mt5.copy_rates_from(symbol, timeframe, date_from, count)
+            elif method == "from_pos":
+                data = mt5.copy_rates_from_pos(symbol, timeframe, start_pos, count)
+            elif method == "range":
+                data = mt5.copy_rates_range(symbol, timeframe, date_from, date_to)
+        elif data_type == "ticks":
+            if method == "from":
+                data = mt5.copy_ticks_from(symbol, date_from, count, flags)
+            elif method == "range":
+                data = mt5.copy_ticks_range(symbol, date_from, date_to, flags)
+        else:
+            print(f"Invalid data_type: {data_type}. Must be 'rates' or 'ticks'.")
             return None
 
+        if method not in ["from", "from_pos", "range"]:
+            print(f"Invalid method: {method}. Must be 'from', 'from_pos', or 'range'.")
+            return None
+
+        if data is None:
+            print(f"Failed to get {data_type} for {symbol}, error code = {mt5.last_error()}")
+            return None
+
+        # نمایش تعداد داده‌های دریافت‌شده برای تیک‌ها
+        if data_type == "ticks":
+            print(f"Ticks received: {len(data)}")
+
         # نمایش داده‌های خام (حداکثر 10 ردیف)
-        print("Display obtained data 'as is'")
+        print(f"Display obtained {data_type} 'as is'")
         counter = 0
-        for rate in rates:
+        for item in data:
             counter += 1
             if counter <= 10:
-                print(rate)
+                print(item)
 
-        # ایجاد DataFrame از داده‌های دریافت‌شده
-        rates_frame = pd.DataFrame(rates)
-        # تبدیل زمان از ثانیه به فرمت datetime
-        rates_frame['time'] = pd.to_datetime(rates_frame['time'], unit='s')
+        # ایجاد DataFrame
+        data_frame = pd.DataFrame(data)
+        # تبدیل زمان به فرمت datetime
+        if data_frame.shape[0] > 0:
+            data_frame['time'] = pd.to_datetime(data_frame['time'], unit='s')
 
         # نمایش DataFrame (حداکثر 10 ردیف)
-        print("\nDisplay dataframe with data")
-        print(rates_frame.head(10))
+        print(f"\nDisplay dataframe with {data_type}")
+        print(data_frame.head(10))
 
         # تبدیل داده‌های خام به لیست دیکشنری‌ها
-        raw_rates = [
-            {
-                'time': rate['time'],
-                'open': rate['open'],
-                'high': rate['high'],
-                'low': rate['low'],
-                'close': rate['close'],
-                'tick_volume': rate['tick_volume'],
-                'spread': rate['spread'],
-                'real_volume': rate['real_volume']
-            } for rate in rates
-        ]
+        if data_type == "rates":
+            raw_data = [
+                {
+                    'time': item['time'],
+                    'open': item['open'],
+                    'high': item['high'],
+                    'low': item['low'],
+                    'close': item['close'],
+                    'tick_volume': item['tick_volume'],
+                    'spread': item['spread'],
+                    'real_volume': item['real_volume']
+                } for item in data
+            ]
+        else:  # ticks
+            raw_data = [
+                {
+                    'time': item['time'],
+                    'bid': item['bid'],
+                    'ask': item['ask'],
+                    'last': item['last'],
+                    'flags': item['flags']
+                } for item in data
+            ]
 
         # برگرداندن دیکشنری حاوی داده‌های خام و DataFrame
         return {
-            "raw_rates": raw_rates,
-            "rates_frame": rates_frame
-        }
-
-    def copy_ticks_from(self, symbol="EURUSD", date_from=None, count=100000, flags=mt5.COPY_TICKS_ALL, login=None,
-                        password=None, server=None, timeout=60000):
-        """
-        متد برای دریافت تیک‌ها از MetaTrader 5 از تاریخ مشخص
-        :param symbol: نماد مالی (پیش‌فرض EURUSD)
-        :param date_from: تاریخ شروع (اختیاری، فرمت datetime)
-        :param count: تعداد تیک‌های درخواستی (پیش‌فرض 100000)
-        :param flags: نوع تیک‌های درخواستی (پیش‌فرض COPY_TICKS_ALL)
-        :param login: شماره حساب (اختیاری)
-        :param password: رمز عبور (اختیاری)
-        :param server: نام سرور (اختیاری)
-        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
-        :return: دیکشنری حاوی داده‌های خام و DataFrame
-        """
-        # تنظیمات نمایش DataFrame
-        pd.set_option('display.max_columns', 500)
-        pd.set_option('display.width', 1500)
-
-        # استفاده از مقادیر پیش‌فرض
-        login = login or self.default_login
-        password = password or self.default_password
-        server = server or self.default_server
-
-        # تنظیم تاریخ پیش‌فرض اگر date_from داده نشده باشد
-        timezone = pytz.timezone("Etc/UTC")
-        if date_from is None:
-            date_from = datetime.datetime(2020, 1, 10, tzinfo=timezone)
-
-        # اطمینان از اتصال
-        success = self.manage_connection(action="initialize", login=login, password=password, server=server,
-                                         timeout=timeout)
-        if not success:
-            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
-            return None
-
-        # چک کردن وجود نماد در سرور
-        available_symbols = mt5.symbols_get()
-        if not any(s.name == symbol for s in available_symbols):
-            print(f"Symbol {symbol} not found in server")
-            print(f"Retrying with fallback symbol EURUSD")
-            symbol = "EURUSD"
-            if not any(s.name == symbol for s in available_symbols):
-                print(f"Fallback symbol EURUSD not found in server")
-                return None
-
-        # فعال کردن نماد در MarketWatch
-        selected = mt5.symbol_select(symbol, True)
-        if not selected:
-            print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
-            return None
-
-        # دریافت تیک‌ها
-        ticks = mt5.copy_ticks_from(symbol, date_from, count, flags)
-        if ticks is None:
-            print(f"Failed to get ticks for {symbol}, error code = {mt5.last_error()}")
-            return None
-
-        print(f"Ticks received: {len(ticks)}")
-
-        # نمایش داده‌های خام (حداکثر 10 ردیف)
-        print("Display obtained ticks 'as is'")
-        counter = 0
-        for tick in ticks:
-            counter += 1
-            if counter <= 10:
-                print(tick)
-
-        # ایجاد DataFrame از داده‌های دریافت‌شده
-        ticks_frame = pd.DataFrame(ticks)
-        # تبدیل زمان از ثانیه به فرمت datetime
-        ticks_frame['time'] = pd.to_datetime(ticks_frame['time'], unit='s')
-
-        # نمایش DataFrame (حداکثر 10 ردیف)
-        print("\nDisplay dataframe with ticks")
-        print(ticks_frame.head(10))
-
-        # تبدیل داده‌های خام به لیست دیکشنری‌ها
-        raw_ticks = [
-            {
-                'time': tick['time'],
-                'bid': tick['bid'],
-                'ask': tick['ask'],
-                'last': tick['last'],
-                'flags': tick['flags']
-            } for tick in ticks
-        ]
-
-        # برگرداندن دیکشنری حاوی داده‌های خام و DataFrame
-        return {
-            "raw_ticks": raw_ticks,
-            "ticks_frame": ticks_frame
-        }
-
-    def copy_ticks_range(self, symbol="EURUSD", date_from=None, date_to=None, flags=mt5.COPY_TICKS_ALL, login=None,
-                         password=None, server=None, timeout=60000):
-        """
-        متد برای دریافت تیک‌ها از MetaTrader 5 در بازه زمانی مشخص
-        :param symbol: نماد مالی (پیش‌فرض EURUSD)
-        :param date_from: تاریخ شروع (اختیاری، فرمت datetime)
-        :param date_to: تاریخ پایان (اختیاری، فرمت datetime)
-        :param flags: نوع تیک‌های درخواستی (پیش‌فرض COPY_TICKS_ALL)
-        :param login: شماره حساب (اختیاری)
-        :param password: رمز عبور (اختیاری)
-        :param server: نام سرور (اختیاری)
-        :param timeout: زمان انتظار (میلی‌ثانیه، پیش‌فرض 60000)
-        :return: دیکشنری حاوی داده‌های خام و DataFrame
-        """
-        # تنظیمات نمایش DataFrame
-        pd.set_option('display.max_columns', 500)
-        pd.set_option('display.width', 1500)
-
-        # استفاده از مقادیر پیش‌فرض
-        login = login or self.default_login
-        password = password or self.default_password
-        server = server or self.default_server
-
-        # تنظیم تاریخ‌های پیش‌فرض اگر date_from یا date_to داده نشده باشند
-        timezone = pytz.timezone("Etc/UTC")
-        if date_from is None:
-            date_from = datetime.datetime(2020, 1, 10, tzinfo=timezone)
-        if date_to is None:
-            date_to = datetime.datetime(2020, 1, 11, tzinfo=timezone)
-
-        # اطمینان از اتصال
-        success = self.manage_connection(action="initialize", login=login, password=password, server=server,
-                                         timeout=timeout)
-        if not success:
-            print(f"Failed to connect to trade account {login} with server={server}, error code = {mt5.last_error()}")
-            return None
-
-        # چک کردن وجود نماد در سرور
-        available_symbols = mt5.symbols_get()
-        if not any(s.name == symbol for s in available_symbols):
-            print(f"Symbol {symbol} not found in server")
-            print(f"Retrying with fallback symbol EURUSD")
-            symbol = "EURUSD"
-            if not any(s.name == symbol for s in available_symbols):
-                print(f"Fallback symbol EURUSD not found in server")
-                return None
-
-        # فعال کردن نماد در MarketWatch
-        selected = mt5.symbol_select(symbol, True)
-        if not selected:
-            print(f"Failed to select {symbol}, error code = {mt5.last_error()}")
-            return None
-
-        # دریافت تیک‌ها
-        ticks = mt5.copy_ticks_range(symbol, date_from, date_to, flags)
-        if ticks is None:
-            print(f"Failed to get ticks for {symbol}, error code = {mt5.last_error()}")
-            return None
-
-        print(f"Ticks received: {len(ticks)}")
-
-        # نمایش داده‌های خام (حداکثر 10 ردیف)
-        print("Display obtained ticks 'as is'")
-        counter = 0
-        for tick in ticks:
-            counter += 1
-            if counter <= 10:
-                print(tick)
-
-        # ایجاد DataFrame از داده‌های دریافت‌شده
-        ticks_frame = pd.DataFrame(ticks)
-        # تبدیل زمان از ثانیه به فرمت datetime
-        ticks_frame['time'] = pd.to_datetime(ticks_frame['time'], unit='s')
-
-        # نمایش DataFrame (حداکثر 10 ردیف)
-        print("\nDisplay dataframe with ticks")
-        print(ticks_frame.head(10))
-
-        # تبدیل داده‌های خام به لیست دیکشنری‌ها
-        raw_ticks = [
-            {
-                'time': tick['time'],
-                'bid': tick['bid'],
-                'ask': tick['ask'],
-                'last': tick['last'],
-                'flags': tick['flags']
-            } for tick in ticks
-        ]
-
-        # برگرداندن دیکشنری حاوی داده‌های خام و DataFrame
-        return {
-            "raw_ticks": raw_ticks,
-            "ticks_frame": ticks_frame
+            "raw_data": raw_data,
+            "data_frame": data_frame
         }
