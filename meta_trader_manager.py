@@ -836,24 +836,52 @@ class Mt5_Manager:
             print(f"Total history orders from {date_from} to {date_to}: {total}")
             return total
 
+            # این بخش را در متد manage_positions_history جایگزین کنید
         elif action == 'history_orders_get':
             # دریافت لیست سفارشات در تاریخچه با قابلیت فیلتر
             orders = None
             if ticket:
-                # فیلتر بر اساس تیکت سفارش
+                # فیلتر بر اساس تیکت سفارش همچنان باید سمت سرور انجام شود چون بهینه است
                 orders = mt5.history_orders_get(ticket=ticket)
             elif position_id:
-                # فیلتر بر اساس تیکت پوزیشن مرتبط
+                # فیلتر بر اساس تیکت پوزیشن نیز باید سمت سرور باشد
                 orders = mt5.history_orders_get(position=position_id)
             else:
-                # دریافت تمام سفارشات در بازه زمانی و گروه مشخص
-                orders = mt5.history_orders_get(date_from, date_to, group=group or "*")
+                # --- منطق جدید برای دور زدن مشکل پارامتر group ---
 
-            # بررسی نتیجه و برگرداندن آن
+                # مرحله ۱: دریافت تمام سفارشات تاریخچه در بازه زمانی (بدون فیلتر گروه)
+                print("Fetching ALL history orders from server...")
+                all_orders = mt5.history_orders_get(date_from, date_to)
+
+                # بررسی اینکه آیا سفارشی دریافت شده است یا نه
+                if all_orders is None:
+                    print(f"Failed to get any history orders, error code = {mt5.last_error()}")
+                    return None
+
+                # مرحله ۲: فیلتر کردن نتایج در پایتون (اگر پارامتر group ارسال شده بود)
+                if group and group != "*":
+                    print(f"Filtering {len(all_orders)} orders by group '{group}' in Python...")
+                    # یک لیست خالی برای نتایج فیلتر شده ایجاد می‌کنیم
+                    filtered_orders = []
+                    # الگوی ساده wildcard را به یک جستجوی ساده "contains" تبدیل می‌کنیم
+                    search_term = group.replace("*", "")
+                    for order in all_orders:
+                        # بررسی می‌کنیم که آیا نام نماد سفارش، شامل عبارت مورد نظر ما هست یا نه
+                        if search_term in order.symbol:
+                            filtered_orders.append(order)
+                    orders = filtered_orders  # لیست نهایی را برابر با لیست فیلتر شده قرار می‌دهیم
+                else:
+                    # اگر پارامتر group ارسال نشده بود، همان لیست کامل را استفاده می‌کنیم
+                    orders = all_orders
+
+            # بررسی نتیجه نهایی و برگرداندن آن
             if orders is None:
+                # این حالت معمولاً رخ نمی‌دهد مگر اینکه در فیلتر با تیکت/پوزیشن خطایی باشد
                 print(f"Failed to get history orders, error code = {mt5.last_error()}")
                 return None
-            print(f"Found {len(orders)} history orders.")
+
+            print(f"Found {len(orders)} matching history orders.")
+            # تبدیل namedtuple به لیست دیکشنری‌ها برای کاربری آسان‌تر
             return [o._asdict() for o in orders]
 
         # --- تاریخچه دیل‌ها (معاملات) ---
