@@ -92,6 +92,9 @@ class KafkaListener:
                 # تبدیل date_from به datetime
                 if "date_from" in params and isinstance(params["date_from"], str):
                     params["date_from"] = datetime.datetime.fromisoformat(params["date_from"])
+                # تبدیل date_to به datetime (تغییر جدید برای رفع خطا)
+                if "date_to" in params and isinstance(params["date_to"], str):
+                    params["date_to"] = datetime.datetime.fromisoformat(params["date_to"])
                 if not method_name or not hasattr(instance, method_name):
                     print(f"Method '{method_name}' not found in class '{class_name}'")
                     print(f"Available methods: {dir(instance)}")
