@@ -14,6 +14,7 @@ CLASS_MAP = {
     "Mt5_Manager": Mt5_Manager
 }
 
+
 # کلاس اصلی برای گوش دادن به پیام‌ها
 class KafkaListener:
     def __init__(self):
@@ -92,11 +93,29 @@ class KafkaListener:
                 # تبدیل date_from به datetime
                 if "date_from" in params and isinstance(params["date_from"], str):
                     params["date_from"] = datetime.datetime.fromisoformat(params["date_from"])
-                # تبدیل date_to به datetime (تغییر جدید برای رفع خطا)
+                # تبدیل date_to به datetime
                 if "date_to" in params and isinstance(params["date_to"], str):
                     params["date_to"] = datetime.datetime.fromisoformat(params["date_to"])
+                # تبدیل flags به مقدار مناسب
                 if "flags" in params and isinstance(params["flags"], str):
                     params["flags"] = getattr(mt5, params["flags"], mt5.COPY_TICKS_ALL)
+                # تبدیل action به حروف کوچک
+                if "action" in params and isinstance(params["action"], str):
+                    params["action"] = params["action"].lower()
+                # تبدیل order_type به مقدار مناسب
+                if "order_type" in params and isinstance(params["order_type"], str):
+                    params["order_type"] = getattr(mt5, params["order_type"], mt5.ORDER_TYPE_BUY)
+                # تبدیل فیلدهای request
+                if "request" in params and isinstance(params["request"], dict):
+                    request = params["request"]
+                    if "action" in request and isinstance(request["action"], str):
+                        request["action"] = getattr(mt5, request["action"], mt5.TRADE_ACTION_DEAL)
+                    if "type" in request and isinstance(request["type"], str):
+                        request["type"] = getattr(mt5, request["type"], mt5.ORDER_TYPE_BUY)
+                    if "type_time" in request and isinstance(request["type_time"], str):
+                        request["type_time"] = getattr(mt5, request["type_time"], mt5.ORDER_TIME_GTC)
+                    if "type_filling" in request and isinstance(request["type_filling"], str):
+                        request["type_filling"] = getattr(mt5, request["type_filling"], mt5.ORDER_FILLING_RETURN)
                 if not method_name or not hasattr(instance, method_name):
                     print(f"Method '{method_name}' not found in class '{class_name}'")
                     print(f"Available methods: {dir(instance)}")
@@ -116,6 +135,7 @@ class KafkaListener:
             print(f"Invalid JSON in value: {cleaned_value}")
         except Exception as e:
             print(f"Error processing message: {e}")
+
 
 # اجرای برنامه
 if __name__ == "__main__":
