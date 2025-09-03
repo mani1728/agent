@@ -466,3 +466,219 @@ p.flush()
 * **Deal / Order / Position**: تفکیک رکوردهای معاملاتی MT5 (ثبت انجام معامله/ثبت سفارش/وضعیت پوزیشن).
 
 ---
+# Version 2:
+
+---
+
+# meta\_trader\_manager\_Guide.md (راهنمای جامع کلاس Mt5\_Manager)
+
+این راهنما، API کامل کلاس **`Mt5_Manager`** را توضیح می‌دهد: مدیریت اتصال، نمادها، عمق بازار، داده‌های تاریخی (OHLCV/Ticks)، مدیریت معاملات (ارسال/محاسبات)، و پوزیشن‌ها/تاریخچه. این کلاس یک لایه‌ی تمیز روی کتابخانهٔ MetaTrader5 برای پایتون است و در کنار Listener/Responder کافکا استفاده می‌شود.
+
+---
+
+## ۱) خلاصه و معماری
+
+* **نقش کلاس:** کپسوله‌کردن فراخوانی‌های MT5 و برگرداندن خروجی‌های خوانا (dict/DataFrame) با مدیریت خطاهای رایج.
+* **ادغام در سیستم:** پیام‌ها از Kafka می‌رسند، در Listener پارامترها تمیز می‌شوند، سپس متد مناسب از `Mt5_Manager` اجرا و نتیجه با Envelope استاندارد پاسخ داده می‌شود.
+* **تبدیل ورودی/خروجی:** تبدیل امن رشته‌ها→کانستنت‌های MT5 و تاریخ‌ها→UTC، و سریال‌سازی JSON-safe نتایج، به کمک `mt5_utils.py` انجام می‌شود.
+
+---
+
+## ۲) پیش‌نیازها و وابستگی‌ها
+
+* **کتابخانه‌ها:** `MetaTrader5`, `pandas`, `pytz`, `datetime` (در خود کلاس).
+* **اتصال فعال MT5:** قبل از اکثر عملیات‌ها باید MT5 initialize شده باشد؛ متدهای کلاس این را بررسی می‌کنند و پیام مناسب می‌دهند.
+* **راه‌اندازی اپ:** طبق `main.py`، ابتدا تنظیمات و لاگ‌ها راه‌اندازی می‌شود و سپس Listener شروع به کار می‌کند.
+
+---
+
+## ۳) شروع سریع (Quickstart)
+
+### ۳.۱) استفادهٔ مستقیم در پایتون
+
+```python
+from meta_trader_manager import Mt5_Manager
+
+mgr = Mt5_Manager()
+mgr.manage_connection(action="initialize")
+info = mgr.manage_connection(action="account_info")
+tick = mgr.manage_symbols(action="tick", symbol="EURUSD")
+```
+
+> دقت کن برای اتصال، بسته به محیط، شاید لازم باشد پارامترهای مسیر/لاگین/سرور را هم بدهی.
+
+### ۳.۲) از طریق Kafka (الگوی معمول)
+
+Listener پیام را می‌گیرد، پارامترها را با `convert_params` تمیز می‌کند، و متد مناسب را صدا می‌زند؛ نتیجه در Envelope استاندارد به تاپیک پاسخ ارسال می‌شود.
+نمونه پیام‌ها و سناریوهای کامل را در گاید کافکای مدیر (Mt5\_Manager) ببین—به‌روز شده و همسان با این راهنماست.
+
+---
+
+## ۴) رابط‌های عمومی کلاس (Public API)
+
+> نکته: تقریباً همهٔ متدها در صورت نیاز، **نماد** را آماده/فعال می‌کنند و خروجی‌ها را به شکل **dict/list/DataFrame** دستیابی‌پذیر می‌دهند.
+
+### ۴.۱) manage\_connection
+
+**اکشن‌ها:** `initialize`, `login`, `terminal_info`, `version`, `account_info`, `shutdown`
+**پارامترهای رایج:** `path`, `login`, `password`, `server`, `timeout`, `portable` (همگی اختیاری بسته به اکشن)
+
+* `initialize`: اگر از قبل متصل است، کش‌ها را به‌روز می‌کند و True برمی‌گرداند؛ در غیر اینصورت MT5 را با پارامترها راه می‌اندازد.
+* `login`: پس از initialize، به حساب لاگین می‌کند و `account_info` را به‌صورت dict برمی‌گرداند.
+* `terminal_info`/`version`/`account_info`: اطلاعات را به dict ساده بازمی‌گردانند.
+* `shutdown`: اتصال را می‌بندد و True برمی‌گرداند.
+
+### ۴.۲) manage\_symbols
+
+**اکشن‌ها:** `total`, `get`, `info`, `tick`, `select`
+
+* `total`: تعداد کل نمادها.
+* `get(group="*")`: لیست نمادها (dict list) با فیلتر گروه.
+* `info(symbol)`: اطلاعات کامل نماد (dict)؛ در صورت غیرفعال بودن، `symbol_select` انجام می‌شود.
+* `tick(symbol)`: آخرین تیک قیمت (dict)؛ در صورت نیاز نماد فعال می‌شود.
+* `select(symbol, enable=True)`: فعال/غیرفعال‌کردن نماد در مارکت‌واچ.
+
+### ۴.۳) manage\_market\_book
+
+**اکشن‌ها:** `add`, `get`, `release` برای عمق بازار نماد.
+
+* `add(symbol)`: اشتراک عمق بازار.
+* `get(symbol)`: اسنپ‌شات عمق بازار (list of dict).
+* `release(symbol)`: لغو اشتراک.
+
+### ۴.۴) fetch\_data
+
+**نوع داده‌ها:** `rates` (OHLCV) یا `ticks`،
+**روش‌ها:** `from`، `from_pos`، `range`.
+
+* برای `rates`:
+
+  * `from(date_from, count, timeframe)`
+  * `from_pos(count, timeframe)`
+  * `range(date_from, date_to, timeframe)`
+    خروجی: dict شامل `raw` (لیست رکوردهای تمیز)، `frame` (DataFrame)، `rows`, `type`, `method`, `symbol`.
+
+* برای `ticks`:
+
+  * `from(date_from, count, flags)`
+  * `from_pos` (به‌صورت fallback با `from` پیاده‌سازی شده چون API رسمی ندارد)
+  * `range(date_from, date_to, flags)`
+    ستون‌ها شامل time/bid/ask/last/volume/time\_msc/flags با تبدیل زمان مناسب هستند.
+
+> این متد پیش از هرچیز **اتصال** و **آمادگی نماد** را بررسی می‌کند و در خطاها پیام مناسب چاپ می‌کند.
+
+### ۴.۵) trade\_manager
+
+**اکشن‌ها:** `total`, `get`, `calc_margin`, `calc_profit`, `check`, `send`.
+
+* `total`: تعداد سفارش‌های باز (orders).
+* `get(symbol=None)`: سفارش‌ها را برمی‌گرداند (dict شامل `raw_orders` و `orders_frame`).
+* `calc_margin(order_type, symbol, volume, price)` و `calc_profit(order_type, symbol, volume, price, price_close)`.
+* `check(request)`: دیکشنری درخواست را تکمیل می‌کند (symbol/tick/price/deviation/type\_filling/type\_time)، سپس `order_check` و خروجی خوانا برمی‌گرداند.
+* `send(request)`:
+
+  * با `_prepare_request` قیمت مارکت را (در صورت خالی بودن) بر اساس `BUY→ask` / `SELL→bid` ست می‌کند، `deviation=10`, `type_filling=IOC`, `type_time=GTC` می‌گذارد.
+  * یک بار `order_send` می‌زند؛ اگر retcode=**DONE** نبود، با تاخیر کوتاه دوباره تلاش می‌کند. نتیجهٔ نهایی را به‌صورت dict استاندارد برمی‌گرداند.
+
+> اگر `symbol` در `request` نباشد یا آماده نباشد، خطای راهنمایی‌کننده برمی‌گرداند. همچنین اگر `order_send` موفق نباشد، نتیجهٔ آخرین تلاش با جزئیات retcode/comment بازگردانده می‌شود.
+
+### ۴.۶) manage\_positions\_history
+
+**اکشن‌ها:**
+
+* پوزیشن‌ها: `positions_total`, `positions_get(ticket|symbol)`
+* تاریخچهٔ سفارش‌ها: `history_orders_total(date_from,date_to)`, `history_orders_get(ticket|position_id|date_from,date_to,group)`
+* تاریخچهٔ دیل‌ها: `history_deals_total(date_from,date_to)`, `history_deals_get(ticket|position_id|date_from,date_to,group)`.
+
+**نکات:** تاریخ‌ها به **UTC** نرمال می‌شوند؛ فیلترهای `ticket/position_id/group` در نظر گرفته شده‌اند؛ خروجی‌ها معمولاً لیست dict هستند.
+
+---
+
+## ۵) قرارداد داده و سریال‌سازی
+
+* بسیاری از خروجی‌ها **dict/list**‌های تمیز هستند؛ برای مقادیر بزرگ، همزمان **DataFrame** کامل نیز بازگردانده می‌شود (کلید `frame`) تا برای تحلیل داخلی استفاده شود.
+* در مسیر ارسال پاسخ/لاگ، از `safe_serialize` استفاده می‌شود تا `datetime/DataFrame/numpy` بدون خطا به JSON قابل مصرف تبدیل شوند (پیش‌نمایش DataFrame، تبدیل datetime به ISO، …).
+
+---
+
+## ۶) نمونه‌های کاربرد (Kafka JSON)
+
+### ۶.۱) اتصال، تیک، چک و ارسال سفارش مارکت، سپس تاریخچهٔ روز
+
+```json
+[
+  { "method": "manage_connection", "params": { "action": "initialize" } },
+  { "method": "manage_symbols", "params": { "action": "tick", "symbol": "EURUSD" } },
+  { "method": "trade_manager", "params": {
+      "action": "check",
+      "request": { "action": "TRADE_ACTION_DEAL", "type": "ORDER_TYPE_BUY", "symbol": "EURUSD", "volume": 0.10, "magic": 987654 }
+  }},
+  { "method": "trade_manager", "params": {
+      "action": "send",
+      "request": { "action": "TRADE_ACTION_DEAL", "type": "ORDER_TYPE_BUY", "symbol": "EURUSD", "volume": 0.10, "magic": 987654 }
+  }},
+  { "method": "manage_positions_history", "params": {
+      "action": "history_deals_get",
+      "date_from": "2025-09-03T00:00:00",
+      "date_to":   "2025-09-03T23:59:59"
+  }}
+]
+```
+
+> الگوی بالا با گاید کافکای مدیر هم‌راستا و به‌روز است.
+
+---
+
+## ۷) Best Practices
+
+* قبل از هر فراخوانی داده/معامله، از **initialize**‌ بودن MT5 مطمئن شوید؛ کلاس خودش بررسی می‌کند و پیام می‌دهد اما مسئولیت جریان با شماست.
+* برای سفارش‌های مارکت، قیمت را **خالی** بگذارید تا بر اساس **bid/ask** ست شود؛ برای Instant، قیمت را خودتان بدهید.
+* از **Magic Number** در سفارش‌ها استفاده کنید تا ردیابی ربات ساده باشد.
+* تاریخ‌ها را همیشه **ISO/UTC** بدهید؛ تبدیل‌ها در لایهٔ ورودی انجام می‌شود اما بهتر است از ابتدا سازگار ارسال شوند.
+* خروجی‌های بزرگ را خلاصه کنید و در صورت لزوم دادهٔ کامل را خارج از کافکا نگه دارید؛ هرچند چانکینگ در Responder لحاظ شده است.
+
+---
+
+## ۸) عیب‌یابی سریع
+
+| علامت/خطا                         | علت محتمل               | راه‌حل                                                                                                         |
+| --------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `MT5 not initialized/connected.`  | initialize نشده         | قبل از عملیات، `manage_connection/initialize` را صدا بزنید                                                     |
+| `Symbol 'X' not found/visible`    | نماد نامعتبر یا غیرفعال | از `manage_symbols/select` برای فعال‌سازی استفاده کنید؛ یا نام نماد را اصلاح کنید                              |
+| `ticks/from_pos is not supported` | محدودیت MT5             | از `ticks/from` با `date_from` استفاده می‌شود (fallback)                                                       |
+| `order_send retcode != DONE`      | قیمت/فیلینگ/انحراف      | از `check` برای بررسی استفاده کنید؛ `type_filling/deviation` را تنظیم کنید؛ تلاش دوم ارسال در کد تعبیه شده است |
+| تاریخچه صفر است                   | بازه/گروه نامناسب       | `date_from/date_to` را به UTC درست بدهید؛ `group` را چک کنید (مثل `"*"`/نماد)                                  |
+
+---
+
+## ۹) مرجع سریع کانستنت‌ها (ارسال به‌صورت رشته)
+
+* **Order Types:** `ORDER_TYPE_BUY`, `ORDER_TYPE_SELL`, …
+* **Trade Actions:** `TRADE_ACTION_DEAL`, `TRADE_ACTION_PENDING`, …
+* **Filling:** `ORDER_FILLING_IOC`, `ORDER_FILLING_FOK`, `ORDER_FILLING_RETURN`
+* **Time:** `ORDER_TIME_GTC`, `ORDER_TIME_DAY`, `ORDER_TIME_SPECIFIED`, …
+* **Timeframes:** `TIMEFRAME_M1`, `TIMEFRAME_H1`, `TIMEFRAME_H4`, `TIMEFRAME_D1`, …
+* **Tick Flags:** `COPY_TICKS_ALL`, `COPY_TICKS_INFO`, `COPY_TICKS_TRADE`
+
+> همهٔ این‌ها را می‌توانی **به‌صورت رشته** در پیام بفرستی؛ در ورودی، به کانستنت واقعی MT5 تبدیل می‌شوند.
+
+---
+
+## ۱۰) چک‌لیست استقرار
+
+* [ ] `manage_connection/initialize` در شروع سناریوها
+* [ ] تاریخ‌های ISO/UTC در ورودی‌ها (یا اتکا به تبدیل امن ورودی)
+* [ ] لاگ JSON در تولید (`LOG_JSON=true`) و سطح لاگ مناسب (`INFO/WARNING`)
+* [ ] Listener و Envelope پاسخ مطابق `main.py` و `kafka_listener.py` راه‌اندازی شده‌اند
+* [ ] مصرف‌کنندهٔ پاسخ منطق **reassemble** بر اساس `(corr_id, seq, total)` را دارد
+
+---
+
+## ۱۱) پیوست: جریان کامل در اکوسیستم
+
+1. `main.py` تنظیمات را از ENV می‌خواند و لاگ‌ها را راه می‌اندازد، سپس Listener را اجرا می‌کند.
+2. Listener پیام‌ها را از تاپیک ورودی می‌گیرد، پارامترها را با `convert_params` تمیز می‌کند و متد مربوطه از `Mt5_Manager` را صدا می‌زند.
+3. نتیجه با `safe_serialize` به JSON-safe تبدیل می‌شود و توسط Responder با چانکینگ و هدرهای استاندارد ارسال می‌گردد.
+
+---
+
