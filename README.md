@@ -421,75 +421,91 @@ sequenceDiagram
 
 ```mermaid
 classDiagram
-  class Mt5_Manager {
-    +Mt5_Manager(config)
-    +connect(): bool
-    +is_connected: bool
-    +get_account_info(): Dict
-    +get_symbols(filter:str="*"): List~Dict~
-    +get_quote(symbol:str): Dict
-    +place_order(req: OrderRequest): OrderResult
-    +modify_order(id:int, params:Dict): OrderResult
-    +close_order(id:int): OrderResult
-    +shutdown(): void
-    -_ensure_conn(): void
-    -_map_error(code:int): str
-  }
+    direction TB
+    
+    class Mt5_Manager {
+        +Mt5_Manager(config: Dict)
+        +is_connected: bool
+        +connect(): bool
+        +shutdown(): void
+        +get_account_info(): Dict
+        +get_symbols(filter: str = "*"): List~Dict~
+        +get_quote(symbol: str): Dict
+        +place_order(req: OrderRequest): OrderResult
+        +modify_order(id: int, params: Dict): OrderResult
+        +close_order(id: int): OrderResult
+        -_ensure_conn(): void
+        -_map_error(code: int): str
+    }
 
-  class KafkaListener {
-    +KafkaListener(cfg, manager, responder)
-    +start(): void
-    +stop(): void
-    +_handle_message(msg): void
-    -_parse_message(raw)->Request
-    -_validate(req)->void
-    -_dispatch(req)->ResponsePayload
-  }
+    class KafkaListener {
+        +KafkaListener(cfg: Dict, manager: Mt5_Manager, responder: KafkaResponder)
+        +start(): void
+        +stop(): void
+        +_handle_message(msg: Any): void
+        -_parse_message(raw: bytes) Request
+        -_validate(req: Request): void
+        -_dispatch(req: Request): ResponsePayload
+    }
 
-  class KafkaResponder {
-    +KafkaResponder(cfg)
-    +send(payload: ResponsePayload): void
-    +flush(): void
-    -_chunk(bytes, max_size)->List~Chunk~
-    -_serialize(obj)->bytes
-  }
+    class KafkaResponder {
+        +KafkaResponder(cfg: Dict)
+        +send(payload: ResponsePayload): void
+        +flush(): void
+        -_chunk(data: bytes, max_size: int) List~Chunk~
+        -_serialize(obj: Any): bytes
+    }
 
-  class ConfigLogging {
-    +setup_logging(level:str, file:str?): Logger
-    +load_env()->Dict
-  }
+    class ConfigLogging {
+        +setup_logging(level: str, file: str?): Logger
+        +load_env(): Dict
+    }
 
-  class Mt5Utils {
-    <<utility>>
-    +to_json_safe(obj)->Any
-    +decimal_to_float(d)->float
-    +datetime_to_iso(dt)->str
-    +chunks(b:bytes, n:int)->List~bytes~
-    +validate_order(req)->None|Error
-  }
+    class Mt5Utils {
+        <<utility>>
+        +to_json_safe(obj: Any): Any
+        +decimal_to_float(d: Decimal): float
+        +datetime_to_iso(dt: datetime): str
+        +chunks(data: bytes, chunk_size: int): List~bytes~
+        +validate_order(req: Dict): None|Exception
+    }
 
-  class Request {
-    +request_id: str
-    +op: str
-    +params: Dict
-    +ts: datetime
-  }
+    class Request {
+        +request_id: str
+        +op: str
+        +params: Dict
+        +ts: datetime
+    }
 
-  class ResponsePayload {
-    +request_id: str
-    +ok: bool
-    +result: Any
-    +error: str?
-    +meta: Dict
-  }
+    class ResponsePayload {
+        +request_id: str
+        +ok: bool
+        +result: Any
+        +error: str?
+        +meta: Dict
+    }
 
-  Mt5_Manager <.. Mt5Utils : uses
-  KafkaResponder <.. Mt5Utils : uses
-  KafkaListener --> Mt5_Manager : dispatch()
-  KafkaListener --> KafkaResponder : enqueue()
-  ConfigLogging <.. KafkaListener : logger
-  ConfigLogging <.. KafkaResponder : logger
-  ConfigLogging <.. Mt5_Manager : logger
+    %% Relationships
+    Mt5_Manager "1" <.. "1" Mt5Utils : uses
+    KafkaResponder "1" <.. "1" Mt5Utils : uses
+    KafkaListener "1" --> "1" Mt5_Manager : dispatches to
+    KafkaListener "1" --> "1" KafkaResponder : enqueues to
+    ConfigLogging "1" <.. "1" KafkaListener : provides logger
+    ConfigLogging "1" <.. "1" KafkaResponder : provides logger
+    ConfigLogging "1" <.. "1" Mt5_Manager : provides logger
+
+    %% Styling for better visibility
+    classDef mainClass fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000000
+    classDef utilClass fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000000
+    classDef dataClass fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000000
+    classDef configClass fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#000000
+
+    class Mt5_Manager,KafkaListener,KafkaResponder mainClass
+    class Mt5Utils utilClass
+    class Request,ResponsePayload dataClass
+    class ConfigLogging configClass
+
+    linkStyle default stroke:#000000,stroke-width:1px
 ```
 
 ---
