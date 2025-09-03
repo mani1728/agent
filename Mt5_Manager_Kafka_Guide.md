@@ -1,8 +1,6 @@
-```markdown
-
-#meta_trader_manager.py
+# meta_trader_manager.py
 # 📖 دفترچهٔ راهنمای پیام‌های Kafka برای Mt5_Manager
-```
+
 ```markdown
 این دفترچه تمام حالت‌های ممکن برای ارسال پیام به Kafka و اجرای متدهای کلاس Mt5_Manager را توضیح می‌دهد.
 کلید (key) پیام همیشه باید `"Mt5_Manager"` باشد.
