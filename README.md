@@ -486,13 +486,13 @@ classDiagram
     }
 
     %% Relationships
-    Mt5_Manager "1" <.. "1" Mt5Utils : uses
-    KafkaResponder "1" <.. "1" Mt5Utils : uses
-    KafkaListener "1" --> "1" Mt5_Manager : dispatches to
-    KafkaListener "1" --> "1" KafkaResponder : enqueues to
-    ConfigLogging "1" <.. "1" KafkaListener : provides logger
-    ConfigLogging "1" <.. "1" KafkaResponder : provides logger
-    ConfigLogging "1" <.. "1" Mt5_Manager : provides logger
+    Mt5_Manager --|> Mt5Utils : uses
+    KafkaResponder --|> Mt5Utils : uses
+    KafkaListener --> Mt5_Manager : dispatches to
+    KafkaListener --> KafkaResponder : enqueues to
+    ConfigLogging --|> KafkaListener : provides logger
+    ConfigLogging --|> KafkaResponder : provides logger
+    ConfigLogging --|> Mt5_Manager : provides logger
 
     %% Styling for better visibility
     classDef mainClass fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000000
@@ -500,12 +500,13 @@ classDiagram
     classDef dataClass fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000000
     classDef configClass fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#000000
 
-    class Mt5_Manager,KafkaListener,KafkaResponder mainClass
+    class Mt5_Manager mainClass
+    class KafkaListener mainClass
+    class KafkaResponder mainClass
     class Mt5Utils utilClass
-    class Request,ResponsePayload dataClass
+    class Request dataClass
+    class ResponsePayload dataClass
     class ConfigLogging configClass
-
-    linkStyle default stroke:#000000,stroke-width:1px
 ```
 
 ---
