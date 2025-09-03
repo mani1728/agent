@@ -1,7 +1,7 @@
 
 ---
 
-# README.md (با کامنت فارسی درون کد)
+# README.md
 
 ````markdown
 <!--
