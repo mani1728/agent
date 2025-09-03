@@ -281,9 +281,9 @@ flowchart TB
 
 ```mermaid
 graph LR
-    classDef infra fill:#fff2cc,stroke:#d6b656,stroke-width:3px,stroke-dasharray:5 5;
-    classDef core fill:#d5e8d4,stroke:#82b366,stroke-width:3px;
-    classDef module fill:#e1d5e7,stroke:#9673a6,stroke-width:2px;
+    classDef infra fill:#fff2cc,stroke:#d6b656,stroke-width:3px,stroke-dasharray:5 5,color:#000000;
+    classDef core fill:#d5e8d4,stroke:#82b366,stroke-width:3px,color:#000000;
+    classDef module fill:#e1d5e7,stroke:#9673a6,stroke-width:2px,color:#000000;
     classDef connection stroke:#ff6d00,stroke-width:2px;
     classDef dataConnection stroke:#3949ab,stroke-width:2px;
     classDef utilityConnection stroke:#7b1fa2,stroke-width:2px;
