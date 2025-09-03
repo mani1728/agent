@@ -5,4 +5,4 @@ project/
 ├─ kafka_listener.py          # مرحله ۴: مصرف‌کنندهٔ دستورات (Consumer) + فراخوانی متدها
 ├─ meta_trader_manager.py     # همون نسخهٔ بهینه‌ی قبلی شما
 ├─ main.py                    # مرحله ۵: نقطهٔ شروع برنامه
-اختیاری - نمونه‌ها # sender.py / consumer_example.py ─└
+└─ Examples                   # sender.py / consumer_example.py
