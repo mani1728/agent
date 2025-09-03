@@ -203,13 +203,13 @@ producer.flush()
 
 ```mermaid
 flowchart TD
-    A[main.py] --> B[load_settings_from_env()]
-    A --> C[setup_logging()]
+    A[main.py] --> B[load_settings_from_env]
+    A --> C[setup_logging]
     A --> D[KafkaListener]
     D --> E[Kafka Consumer]
     D --> F[KafkaResponder]
-    E -->|مصرف پیام‌ها| Mt5_Manager
-    Mt5_Manager -->|خروجی| F
+    E -->|مصرف پیام‌ها| G[Mt5_Manager]
+    G -->|خروجی| F
 ```
 
 
