@@ -281,36 +281,66 @@ flowchart TB
 
 ```mermaid
 graph LR
-  subgraph Infra
-    K[(Kafka)]
-    T((MT5))
-  end
+    classDef infra fill:#fff2cc,stroke:#d6b656,stroke-width:3px,stroke-dasharray:5 5;
+    classDef core fill:#d5e8d4,stroke:#82b366,stroke-width:3px;
+    classDef module fill:#e1d5e7,stroke:#9673a6,stroke-width:2px;
+    classDef connection stroke:#ff6d00,stroke-width:2px;
+    classDef dataConnection stroke:#3949ab,stroke-width:2px;
+    classDef utilityConnection stroke:#7b1fa2,stroke-width:2px;
 
-  subgraph Agent
-    A1[main.py]
-    A2[config_logging.py]
-    A3[kafka_listener.py]
-    A4[kafka_responder.py]
-    A5[meta_trader_manager.py]
-    A6[mt5_utils.py]
-  end
+    subgraph Infra["🏗️ Infrastructure Layer"]
+        K[(["🔮 Kafka Cluster<br/>Bootstrap Servers"])]
+        T((["📊 MetaTrader 5<br/>Terminal API"]))
+    end
 
-  A1-->A2
-  A1-->A3
-  A1-->A4
-  A1-->A5
+    subgraph Agent["🤖 Trading Agent Microservice"]
+        A1[["🎯 main.py<br/>Application Orchestrator"]]
+        A2[["⚙️ config_logging.py<br/>Config & Logger Factory"]]
+        
+        subgraph Modules["🛠️ Functional Modules"]
+            A3[["👂 kafka_listener.py<br/>Command Consumer"]]
+            A4[["📤 kafka_responder.py<br/>Response Producer"]]
+            A5[["👑 meta_trader_manager.py<br/>MT5 Core Manager"]]
+            A6[["🛠️ mt5_utils.py<br/>Utilities & Serializers"]]
+        end
+    end
 
-  A3-- consume -->K
-  A4-- produce -->K
+    %% Core Dependencies
+    A1-->|"initializes & injects"|A2
+    A1-->|"creates instance"|A3
+    A1-->|"configures producer"|A4
+    A1-->|"instantiates manager"|A5
 
-  A3-- route -->A5
-  A5-- call/receive -->T
+    %% External Communications
+    A3-.->|"📥 Consume Commands<br/>Group: kafka_listener_group"|K
+    A4-.->|"📤 Produce Responses<br/>Topic: agent-responses"|K
 
-  A5-- uses -->A6
-  A4-- uses -->A6
-  A3-- uses logger -->A2
-  A4-- uses logger -->A2
-  A5-- uses logger -->A2
+    %% Internal Processing
+    A3==>|"🚀 Route & Dispatch<br/>Method Invocation"|A5
+    A5==>|"🔌 Execute Operations<br/>Real-time Trading"|T
+
+    %% Utility Dependencies
+    A5-->|"🔄 Serialize Data<br/>Normalize Responses"|A6
+    A4-->|"📦 Chunking Logic<br/>Message Packaging"|A6
+
+    %% Logging Dependencies
+    A3-->|"📝 Structured Logging<br/>JSON/Text Output"|A2
+    A4-->|"📊 Audit Trails<br/>Performance Metrics"|A2
+    A5-->|"⚡ Execution Logs<br/>Error Handling"|A2
+
+    %% Styling
+    class Infra infra;
+    class Agent core;
+    class Modules module;
+    class K,T infra;
+    class A1,A2 core;
+    class A3,A4,A5,A6 module;
+
+    linkStyle 0,1,2,3 stroke:#2e7d32,stroke-width:2px;
+    linkStyle 4,5 stroke:#ff6f00,stroke-width:3px;
+    linkStyle 6,7 stroke:#d32f2f,stroke-width:2px;
+    linkStyle 8,9 stroke:#7b1fa2,stroke-width:2px;
+    linkStyle 10,11,12 stroke:#0288d1,stroke-width:2px;
 ```
 
 ---
