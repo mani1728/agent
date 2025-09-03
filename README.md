@@ -289,44 +289,44 @@ graph LR
     classDef utilityConnection stroke:#7b1fa2,stroke-width:2px;
 
     subgraph Infra["🏗️ Infrastructure Layer"]
-        K[(["🔮 Kafka Cluster<br/>Bootstrap Servers"])]
-        T((["📊 MetaTrader 5<br/>Terminal API"]))
+        K[Kafka Cluster<br/>Bootstrap Servers]
+        T(MetaTrader 5<br/>Terminal API)
     end
 
     subgraph Agent["🤖 Trading Agent Microservice"]
-        A1[["🎯 main.py<br/>Application Orchestrator"]]
-        A2[["⚙️ config_logging.py<br/>Config & Logger Factory"]]
+        A1[main.py<br/>Application Orchestrator]
+        A2[config_logging.py<br/>Config & Logger Factory]
         
         subgraph Modules["🛠️ Functional Modules"]
-            A3[["👂 kafka_listener.py<br/>Command Consumer"]]
-            A4[["📤 kafka_responder.py<br/>Response Producer"]]
-            A5[["👑 meta_trader_manager.py<br/>MT5 Core Manager"]]
-            A6[["🛠️ mt5_utils.py<br/>Utilities & Serializers"]]
+            A3[kafka_listener.py<br/>Command Consumer]
+            A4[kafka_responder.py<br/>Response Producer]
+            A5[meta_trader_manager.py<br/>MT5 Core Manager]
+            A6[mt5_utils.py<br/>Utilities & Serializers]
         end
     end
 
     %% Core Dependencies
-    A1-->|"initializes & injects"|A2
-    A1-->|"creates instance"|A3
-    A1-->|"configures producer"|A4
-    A1-->|"instantiates manager"|A5
+    A1-->A2
+    A1-->A3
+    A1-->A4
+    A1-->A5
 
     %% External Communications
-    A3-.->|"📥 Consume Commands<br/>Group: kafka_listener_group"|K
-    A4-.->|"📤 Produce Responses<br/>Topic: agent-responses"|K
+    A3-.->|📥 Consume Commands|K
+    A4-.->|📤 Produce Responses|K
 
     %% Internal Processing
-    A3==>|"🚀 Route & Dispatch<br/>Method Invocation"|A5
-    A5==>|"🔌 Execute Operations<br/>Real-time Trading"|T
+    A3==>|🚀 Route & Dispatch|A5
+    A5==>|🔌 Execute Operations|T
 
     %% Utility Dependencies
-    A5-->|"🔄 Serialize Data<br/>Normalize Responses"|A6
-    A4-->|"📦 Chunking Logic<br/>Message Packaging"|A6
+    A5-->|🔄 Serialize Data|A6
+    A4-->|📦 Chunking Logic|A6
 
     %% Logging Dependencies
-    A3-->|"📝 Structured Logging<br/>JSON/Text Output"|A2
-    A4-->|"📊 Audit Trails<br/>Performance Metrics"|A2
-    A5-->|"⚡ Execution Logs<br/>Error Handling"|A2
+    A3-->|📝 Structured Logging|A2
+    A4-->|📊 Audit Trails|A2
+    A5-->|⚡ Execution Logs|A2
 
     %% Styling
     class Infra infra;
