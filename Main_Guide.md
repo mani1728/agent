@@ -168,3 +168,85 @@ producer.flush()
   - کلاس را در فایل خودش تعریف کن.
   - آن را در `CLASS_MAP` اضافه کن.
 - توصیه: لاگ‌ها را با ابزارهایی مثل **Grafana Loki** مانیتور کن.
+
+---
+
+# Version 2:
+
+---
+
+# Main\_Guide.md
+
+## راهنمای ماژول `main.py`
+
+این فایل، **نقطه‌ی شروع (Entry Point)** برنامه است و وظیفه دارد کل سیستم را راه‌اندازی کرده و شنود پیام‌ها از Kafka را آغاز کند.
+
+---
+
+## ۱. وظایف اصلی
+
+1. **بارگذاری تنظیمات**
+   با استفاده از تابع `load_settings_from_env` از فایل `config_logging.py`، تنظیمات برنامه از متغیرهای محیطی (ENV) خوانده می‌شود.
+
+2. **راه‌اندازی سیستم لاگ‌گذاری**
+   از طریق `setup_logging`، خروجی لاگ‌ها به صورت **Human-readable** یا **JSON** (قابل اتصال به ELK/Graylog) پیکربندی می‌شود.
+
+3. **ساخت KafkaListener**
+   یک نمونه از کلاس `KafkaListener` ایجاد شده و به Kafka متصل می‌شود تا دستورات دریافتی را پردازش کند.
+
+4. **شروع حلقه شنود**
+   با فراخوانی `listener.listen()`، برنامه وارد حلقه اصلی مصرف پیام‌ها از Kafka می‌شود و نتایج را با کمک `KafkaResponder` به تاپیک خروجی ارسال می‌کند.
+
+---
+
+## ۲. معماری ساده
+
+```mermaid
+flowchart TD
+    A[main.py] --> B[load_settings_from_env()]
+    A --> C[setup_logging()]
+    A --> D[KafkaListener]
+    D --> E[Kafka Consumer]
+    D --> F[KafkaResponder]
+    E -->|مصرف پیام‌ها| Mt5_Manager
+    Mt5_Manager -->|خروجی| F
+```
+
+---
+
+## ۳. اجرای برنامه
+
+برای اجرای برنامه کافی است دستور زیر را اجرا کنید:
+
+```bash
+python main.py
+```
+
+در صورت نیاز می‌توانید تنظیمات را با **متغیرهای محیطی** تغییر دهید:
+
+```bash
+LOG_LEVEL=DEBUG LOG_JSON=true LOG_FILE=logs/app.log python main.py
+```
+
+---
+
+## ۴. وابستگی‌ها
+
+* `config_logging.py` → مدیریت تنظیمات و لاگ‌گذاری
+* `kafka_listener.py` → دریافت و پردازش پیام‌ها
+* `kafka_responder.py` → ارسال نتایج به Kafka
+* `meta_trader_manager.py` → منطق اصلی کار با MetaTrader5
+
+---
+
+## ۵. خلاصه کد
+
+```python
+def main() -> None:
+    settings = load_settings_from_env()   # خواندن تنظیمات
+    setup_logging(settings)               # راه‌اندازی لاگ‌گذاری
+    listener = KafkaListener(settings)    # ساخت شنونده
+    listener.listen()                     # شروع شنود
+```
+
+---
