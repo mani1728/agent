@@ -1,212 +1,408 @@
-# C:\Users\Administrator\Desktop\agent_low\agent\main.py
-# این اسکریپت یک شنونده (Consumer) برای کافکا است که به تاپیک مشخصی گوش می‌دهد
-# و پیام‌های دریافتی را پردازش کرده و متدهای مربوطه از کلاس‌های مدیریتی را فراخوانی می‌کند.
+# main.py
+# شنونده‌ی Kafka با پردازش داینامیک پیام‌ها و فراخوانی Mt5_Manager
+# نسخه‌ی بهینه با JSON/Human logging، فایل لاگ چرخشی، تبدیل امن پارامترها،
+# مدیریت سیگنال و سازگاری کامل با فرمت پیام‌های فعلی.
 
-# --- وارد کردن کتابخانه‌های مورد نیاز ---
-from confluent_kafka import Consumer, KafkaException  # برای اتصال و دریافت پیام از کافکا
-import json  # برای کار با داده‌های با فرمت JSON
-from meta_trader_manager import Mt5_Manager  # وارد کردن کلاس مدیریت متاتریدر که خودمان نوشتیم
-import MetaTrader5 as mt5  # کتابخانه رسمی برای اتصال به متاتریدر ۵
-import datetime  # برای کار با تاریخ و زمان
-import pytz  # برای کار با مناطق زمانی (Timezones)
+from __future__ import annotations
 
-# --- تنظیمات کلی و استاتیک برنامه ---
-KAFKA_SERVERS = "192.168.1.254:9092"  # آدرس سرور یا سرورهای کافکا
-TOPIC = "agent-send"  # نام تاپیکی که برنامه به آن گوش می‌دهد
+import json
+import os
+import signal
+import sys
+import logging
+from logging.handlers import RotatingFileHandler
+import datetime
+import ast
+from typing import Any, Dict, List, Optional
 
-# دیکشنری برای مپ کردن (متصل کردن) نام کلاس‌ها به آبجکت واقعی کلاس.
-# این کار به ما اجازه می‌دهد تا بر اساس کلید (key) پیام کافکا، کلاس مورد نظر را به صورت داینامیک پیدا کنیم.
-CLASS_MAP = {
-    "Mt5_Manager": Mt5_Manager
+from confluent_kafka import Consumer, KafkaException, KafkaError
+import MetaTrader5 as mt5
+import pytz
+
+from meta_trader_manager import Mt5_Manager  # کلاس مدیریتی شما
+
+# =========================
+# پیکربندی و لاگ‌گذاری
+# =========================
+
+def setup_logging() -> None:
+    """
+    راه‌اندازی لاگ‌گذاری:
+      - خروجی کنسول (خوانا یا JSON)
+      - خروجی فایل با Rotation
+    ENV:
+      LOG_LEVEL=DEBUG|INFO|WARNING|ERROR|CRITICAL
+      LOG_JSON=true|false
+      LOG_FILE=logs/app.log
+      LOG_MAX_BYTES=10485760
+      LOG_BACKUPS=10
+    """
+    log_level = os.getenv("LOG_LEVEL", "DEBUG").upper()
+    use_json = os.getenv("LOG_JSON", "false").strip().lower() in ("1", "true", "yes")
+    log_file = os.getenv("LOG_FILE", "logs/app.log")
+    max_bytes = int(os.getenv("LOG_MAX_BYTES", "10485760"))  # 10MB
+    backups = int(os.getenv("LOG_BACKUPS", "10"))
+
+    root = logging.getLogger()
+    root.setLevel(log_level)
+
+    # پاک کردن هندلرهای قبلی برای جلوگیری از تکرار
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    class JsonFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:
+            import json as _json
+            payload = {
+                "ts": self.formatTime(record, datefmt="%Y-%m-%dT%H:%M:%S"),
+                "level": record.levelname,
+                "logger": record.name,
+                "msg": record.getMessage(),
+            }
+            if record.exc_info:
+                payload["exc"] = self.formatException(record.exc_info)
+            # اجازه بده اگر کسی فیلد extra={'foo': 'bar'} ست کرد، اضافه شود
+            if hasattr(record, "extra") and isinstance(record.extra, dict):
+                payload.update(record.extra)
+            return _json.dumps(payload, ensure_ascii=False)
+
+    human_fmt = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    json_fmt = JsonFormatter()
+
+    # کنسول
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(log_level)
+    console.setFormatter(json_fmt if use_json else human_fmt)
+    root.addHandler(console)
+
+    # فایل با Rotation
+    try:
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    except Exception:
+        pass
+
+    file_handler = RotatingFileHandler(
+        filename=log_file,
+        maxBytes=max_bytes,
+        backupCount=backups,
+        encoding="utf-8"
+    )
+    file_handler.setLevel(log_level)
+    file_handler.setFormatter(json_fmt if use_json else human_fmt)
+    root.addHandler(file_handler)
+
+    # کم‌کردن پرگویی برخی کتابخانه‌ها
+    logging.getLogger("confluent_kafka").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+    LOGGER.info(
+        "Logging initialized (json=%s, file=%s, level=%s, rotation=%s bytes x %s backups)",
+        use_json, log_file, log_level, max_bytes, backups
+    )
+
+
+LOGGER = logging.getLogger("KafkaListener")
+
+# =========================
+# پیکربندی از محیط با fallback
+# =========================
+
+KAFKA_SERVERS = os.getenv("KAFKA_SERVERS", "192.168.1.254:9092")
+TOPIC = os.getenv("KAFKA_TOPIC", "agent-send")
+GROUP_ID = os.getenv("KAFKA_GROUP_ID", "kafka_listener_group")
+
+# نگاشت نام کلاس → کلاس. کلید پیام Kafka باید با این نام‌ها بخورد.
+CLASS_MAP: Dict[str, Any] = {
+    "Mt5_Manager": Mt5_Manager,
 }
 
+# =========================
+# ابزارهای کمکی تبدیل و سریال‌سازی
+# =========================
 
-# کلاس اصلی برنامه که وظیفه گوش دادن به کافکا و پردازش پیام‌ها را بر عهده دارد
+UTC_TZ = pytz.timezone("Etc/UTC")
+
+
+def parse_json_or_literal(text: str) -> Any:
+    """ابتدا json.loads، در صورت خطا ast.literal_eval برای انعطاف بیشتر."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            return ast.literal_eval(text)
+        except Exception as e:
+            LOGGER.error("Unable to parse message payload as JSON or Python literal: %s", e)
+            raise
+
+
+def parse_iso_dt(dt: str) -> datetime.datetime:
+    """پارس ISO و تبدیل به datetime آگاه از UTC. از 'Z' نیز پشتیبانی می‌کند."""
+    if dt.endswith("Z"):
+        dt = dt[:-1] + "+00:00"
+    try:
+        dt_obj = datetime.datetime.fromisoformat(dt)
+    except Exception:
+        dt_obj = datetime.datetime.fromisoformat(dt.replace(" ", "T"))
+    if dt_obj.tzinfo is None:
+        return UTC_TZ.localize(dt_obj)
+    return dt_obj.astimezone(UTC_TZ)
+
+
+def to_mt5_const(name: str, default: Any) -> Any:
+    """نگاشت امن رشته به کانستنت MT5 (در صورت نبودن، default)."""
+    return getattr(mt5, name, default)
+
+
+def convert_request_fields(req: Dict[str, Any]) -> None:
+    """تبدیل فیلدهای داخل request به کانستنت‌های MT5 در صورت رشته بودن."""
+    if "action" in req and isinstance(req["action"], str):
+        req["action"] = to_mt5_const(req["action"], mt5.TRADE_ACTION_DEAL)
+    if "type" in req and isinstance(req["type"], str):
+        req["type"] = to_mt5_const(req["type"], mt5.ORDER_TYPE_BUY)
+    if "type_time" in req and isinstance(req["type_time"], str):
+        req["type_time"] = to_mt5_const(req["type_time"], mt5.ORDER_TIME_GTC)
+    if "type_filling" in req and isinstance(req["type_filling"], str):
+        req["type_filling"] = to_mt5_const(req["type_filling"], mt5.ORDER_FILLING_IOC)
+
+
+def convert_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    تبدیل امن پارامترهای سطح بالا:
+      timeframe/flags/order_type → کانستنت
+      action → lowercase
+      date_from/date_to → datetime (UTC-aware)
+      request.* → کانستنت‌سازی
+    """
+    out = dict(params)
+
+    if "timeframe" in out and isinstance(out["timeframe"], str):
+        out["timeframe"] = to_mt5_const(out["timeframe"], mt5.TIMEFRAME_H4)
+
+    if "flags" in out and isinstance(out["flags"], str):
+        out["flags"] = to_mt5_const(out["flags"], mt5.COPY_TICKS_ALL)
+
+    if "order_type" in out and isinstance(out["order_type"], str):
+        out["order_type"] = to_mt5_const(out["order_type"], mt5.ORDER_TYPE_BUY)
+
+    if "action" in out and isinstance(out["action"], str):
+        out["action"] = out["action"].lower()
+
+    if "date_from" in out and isinstance(out["date_from"], str):
+        out["date_from"] = parse_iso_dt(out["date_from"])
+    if "date_to" in out and isinstance(out["date_to"], str):
+        out["date_to"] = parse_iso_dt(out["date_to"])
+
+    if "request" in out and isinstance(out["request"], dict):
+        convert_request_fields(out["request"])
+
+    return out
+
+
+def safe_serialize(obj: Any, _depth: int = 0, _limit: int = 3) -> Any:
+    """
+    تبدیل نتایج به فرم JSON-safe برای لاگ:
+      datetime → ISO
+      namedtuple._asdict → dict
+      dict/list → بازگشتی
+      numpy/pandas → خلاصه
+      سایر موارد → str(obj) در صورت نیاز
+    """
+    if _depth > _limit:
+        return str(obj)
+
+    if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
+        try:
+            return obj.isoformat()
+        except Exception:
+            return str(obj)
+
+    if hasattr(obj, "_asdict"):
+        try:
+            return {k: safe_serialize(v, _depth + 1, _limit) for k, v in obj._asdict().items()}
+        except Exception:
+            return str(obj)
+
+    if isinstance(obj, dict):
+        return {str(k): safe_serialize(v, _depth + 1, _limit) for k, v in obj.items()}
+
+    if isinstance(obj, (list, tuple)):
+        return [safe_serialize(v, _depth + 1, _limit) for v in obj]
+
+    try:
+        import numpy as np  # type: ignore
+        if isinstance(obj, np.generic):
+            return obj.item()
+    except Exception:
+        pass
+
+    try:
+        import pandas as pd  # type: ignore
+        if isinstance(obj, pd.DataFrame):
+            return {
+                "dataframe_preview": obj.head(10).to_dict(orient="records"),
+                "columns": list(obj.columns),
+                "rows": int(getattr(obj, "shape", [0, 0])[0]),
+            }
+        if isinstance(obj, pd.Series):
+            return obj.to_dict()
+    except Exception:
+        pass
+
+    try:
+        json.dumps(obj)
+        return obj
+    except Exception:
+        return str(obj)
+
+# =========================
+# شنونده کافکا
+# =========================
+
 class KafkaListener:
-    # متد سازنده (Constructor) که در زمان ساختن یک نمونه از کلاس، به صورت خودکار فراخوانی می‌شود
-    def __init__(self):
-        # متغیر برای نگهداری نمونه Consumer کافکا
-        self.consumer = None
-        # یک فلگ برای کنترل حلقه اصلی شنونده
-        self.running = False
+    def __init__(self) -> None:
+        self.consumer: Optional[Consumer] = None
+        self.running: bool = False
+        self.manager_instances: Dict[str, Any] = {}
+        self._init_managers()
+        self._init_consumer()
 
-        # --- بهینه‌سازی مهم: ساختن یک نمونه دائمی از کلاس‌های مدیریتی ---
-        # یک دیکشنری برای نگهداری نمونه‌های ساخته‌شده از کلاس‌ها (مانند Mt5_Manager)
-        self.manager_instances = {}
-        # به ازای هر کلاس تعریف‌شده در CLASS_MAP، یک نمونه از آن می‌سازیم و در دیکشنری ذخیره می‌کنیم
+    def _init_managers(self) -> None:
         for name, cls in CLASS_MAP.items():
-            self.manager_instances[name] = cls()
-        # این کار باعث می‌شود به جای ساختن یک نمونه جدید برای هر پیام، از همین یک نمونه در طول اجرای برنامه استفاده شود.
+            try:
+                self.manager_instances[name] = cls()
+                LOGGER.info("Manager instance created: %s", name)
+            except Exception as e:
+                LOGGER.exception("Failed to instantiate manager '%s': %s", name, e)
 
-        # فراخوانی متد برای آماده‌سازی و اتصال Consumer کافکا
-        self.init_consumer()
-
-    # متدی برای مقداردهی اولیه و اتصال به کافکا
-    def init_consumer(self):
-        # ایجاد Consumer با استفاده از تنظیمات اولیه
+    def _init_consumer(self) -> None:
         try:
-            # ساخت یک نمونه از Consumer با کانفیگ‌های لازم
-            self.consumer = Consumer({
-                'bootstrap.servers': KAFKA_SERVERS,  # آدرس سرور کافکا برای اتصال
-                'group.id': 'kafka_listener_group',  # یک شناسه گروه برای این Consumer
-                'auto.offset.reset': 'earliest'
-                # مشخص می‌کند که اگر Consumer جدید بود، از اولین پیام موجود در تاپیک شروع به خواندن کند
-            })
-            # اشتراک (subscribe) در تاپیک مورد نظر برای دریافت پیام‌های آن
+            conf = {
+                "bootstrap.servers": KAFKA_SERVERS,
+                "group.id": GROUP_ID,
+                "auto.offset.reset": "earliest",
+            }
+            self.consumer = Consumer(conf)
             self.consumer.subscribe([TOPIC])
-            print(f"Connected to Kafka servers: {KAFKA_SERVERS}, topic: {TOPIC}")
+            LOGGER.info("Connected to Kafka. servers=%s topic=%s group=%s", KAFKA_SERVERS, TOPIC, GROUP_ID)
         except KafkaException as e:
-            # در صورت بروز خطا در اتصال به کافکا، آن را چاپ کن
-            print(f"Failed to connect to Kafka: {e}")
+            LOGGER.error("Failed to connect to Kafka: %s", e)
+            self.consumer = None
 
-    # متد اصلی که حلقه بی‌نهایت برای گوش دادن به پیام‌ها را اجرا می‌کند
-    def listen(self):
-        # اگر Consumer به درستی ساخته نشده بود، از متد خارج شو
+    def _shutdown(self) -> None:
+        if self.consumer:
+            try:
+                self.consumer.close()
+                LOGGER.info("Kafka consumer closed.")
+            except Exception:
+                LOGGER.exception("Error while closing consumer.")
+        self.consumer = None
+
+    def listen(self) -> None:
         if not self.consumer:
-            print("Consumer not initialized, cannot listen.")
+            LOGGER.error("Consumer not initialized, cannot listen.")
             return
-        # فلگ را برای شروع حلقه اصلی، true قرار بده
+
         self.running = True
-        print("Starting to listen for messages...")
+        self._register_signal_handlers()
+        LOGGER.info("Starting to listen for messages...")
+
         try:
-            # تا زمانی که فلگ running برابر true است، این حلقه ادامه پیدا می‌کند
             while self.running:
-                # منتظر دریافت پیام جدید به مدت 1 ثانیه بمان
                 msg = self.consumer.poll(1.0)
-                # اگر در این 1 ثانیه پیامی دریافت نشد، به ابتدای حلقه برگرد
                 if msg is None:
                     continue
-                # اگر پیامی دریافت شد ولی حاوی خطا بود، خطا را چاپ کن و به ابتدای حلقه برگرد
                 if msg.error():
-                    print(f"Error: {msg.error()}")
+                    if msg.error().code() != KafkaError._PARTITION_EOF:
+                        LOGGER.warning("Kafka error: %s", msg.error())
                     continue
 
-                # مقدار (value) و کلید (key) پیام را از آن استخراج کن
-                value = msg.value().decode('utf-8') if msg.value() else "No value"
-                key = msg.key().decode('utf-8') if msg.key() else "No key"
+                raw_value = msg.value().decode("utf-8") if msg.value() else ""
+                raw_key = msg.key().decode("utf-8") if msg.key() else ""
+                cleaned_key = raw_key.strip().strip('"').strip("'")
 
-                # گاهی key پیام کافکا با " یا ' احاطه شده است، آنها را حذف می‌کنیم تا نام کلاس خالص به دست آید
-                cleaned_key = key.strip('"').strip("'")
-
-                # چاپ اطلاعات پیام دریافت شده برای دیباگ
-                print(f"Received message: {value}")
-                print(f"Raw Key: {key}. Key.type: {type(key)}")
-                print(f"Cleaned Key: {cleaned_key}. Cleaned Key.type: {type(cleaned_key)}")
-
-                # پیام دریافت شده را برای پردازش به متد process_message ارسال کن
-                self.process_message(cleaned_key, value)
+                LOGGER.info("Received message | key=%r value_len=%d", cleaned_key, len(raw_value))
+                self.process_message(cleaned_key, raw_value)
 
         except KeyboardInterrupt:
-            # اگر کاربر با فشردن Ctrl+C برنامه را متوقف کرد، این بخش اجرا می‌شود
-            print("Stopping listener...")
-            self.running = False  # با false کردن فلگ، حلقه اصلی متوقف می‌شود
-        except Exception as e:
-            # در صورت بروز هر خطای پیش‌بینی‌نشده دیگر، آن را چاپ کن
-            print(f"Error processing message: {e}")
+            LOGGER.info("KeyboardInterrupt received. Stopping...")
+        except Exception:
+            LOGGER.exception("Unexpected error in listen loop.")
         finally:
-            # این بلوک کد در هر صورت (چه با خطا و چه بدون خطا) در انتهای کار اجرا می‌شود
-            if self.consumer:
-                self.consumer.close()  # بستن اتصال کافکا
-                print("Kafka consumer closed.")
+            self._shutdown()
 
-    # متدی برای پردازش پیام دریافت شده
-    def process_message(self, class_name, value):
+    def _register_signal_handlers(self) -> None:
+        def handle_sigterm(signum, frame):
+            LOGGER.info("Signal %s received. Shutting down gracefully...", signum)
+            self.running = False
+
         try:
-            # جایگزینی سینگل کوتیشن با دابل کوتیشن برای سازگاری با فرمت استاندارد JSON
-            cleaned_value = value.replace("'", '"')
-            print(f"Cleaned value: {cleaned_value}")
+            signal.signal(signal.SIGINT, handle_sigterm)
+            signal.signal(signal.SIGTERM, handle_sigterm)
+        except Exception:
+            LOGGER.debug("Signal handlers not fully supported on this platform.")
 
-            # رشته JSON را به یک آبجکت پایتون (لیست یا دیکشنری) تبدیل می‌کنیم
-            value_list = json.loads(cleaned_value)
+    def process_message(self, class_name: str, raw_value: str) -> None:
+        # 1) یافتن نمونه کلاس از روی key
+        if class_name not in self.manager_instances:
+            LOGGER.error("Class instance for key '%s' not found. Available: %s",
+                         class_name, list(self.manager_instances.keys()))
+            return
+        instance = self.manager_instances[class_name]
 
-            # برای سادگی، همیشه با پیام به عنوان یک لیست رفتار می‌کنیم
-            if not isinstance(value_list, list):
-                value_list = [value_list]
+        # 2) پارس پیام
+        try:
+            obj = parse_json_or_literal(raw_value)
+        except Exception:
+            LOGGER.error("Skipping message due to parse error.")
+            return
 
-            # بررسی وجود کلاس در CLASS_MAP
-            if class_name not in self.manager_instances:
-                print(f"Class instance for '{class_name}' not found.")
-                return
+        # پیام تکی را هم به لیست تبدیل می‌کنیم
+        if not isinstance(obj, list):
+            obj = [obj]
 
-            # استفاده از نمونه از پیش ساخته شده کلاس برای جلوگیری از ساختن مکرر
-            instance = self.manager_instances[class_name]
+        # 3) حلقه روی دستورات
+        for idx, command in enumerate(obj, start=1):
+            if not isinstance(command, dict):
+                LOGGER.warning("Command #%d is not a dict. Skipping: %r", idx, command)
+                continue
 
-            # حلقه بر روی تمام دستورات موجود در پیام
-            for command in value_list:
-                method_name = command.get("method")
-                params = command.get("params", {})
+            method_name = command.get("method")
+            params = command.get("params", {}) or {}
 
-                # --- بخش تبدیل داده‌ها (Data Type Conversion) ---
+            if not method_name or not hasattr(instance, method_name):
+                LOGGER.error("Method '%s' not found in class '%s'.", method_name, class_name)
+                continue
 
-                # تبدیل رشته تایم‌فریم به ثابت متاتریدر
-                if "timeframe" in params and isinstance(params["timeframe"], str):
-                    params["timeframe"] = getattr(mt5, params["timeframe"], mt5.TIMEFRAME_H4)
+            # 4) تبدیل امن پارامترها
+            try:
+                conv_params = convert_params(params)
+            except Exception:
+                LOGGER.exception("Parameter conversion failed for command #%d: %r", idx, params)
+                continue
 
-                # تعریف منطقه زمانی استاندارد UTC
-                timezone = pytz.timezone("Etc/UTC")
+            # 5) فراخوانی متد
+            method = getattr(instance, method_name)
+            try:
+                LOGGER.info("Calling %s.%s | params=%s", class_name, method_name, safe_serialize(conv_params))
+                result = method(**conv_params)
+                LOGGER.info("Result of %s: %s", method_name, safe_serialize(result))
+            except TypeError as te:
+                LOGGER.error("Invalid parameters for %s.%s: %s | params=%s",
+                             class_name, method_name, te, safe_serialize(conv_params))
+            except Exception:
+                LOGGER.exception("Unhandled error calling %s.%s", class_name, method_name)
 
-                # تبدیل رشته تاریخ به آبجکت datetime آگاه از منطقه زمانی (Timezone-Aware)
-                if "date_from" in params and isinstance(params["date_from"], str):
-                    naive_dt = datetime.datetime.fromisoformat(params["date_from"])
-                    params["date_from"] = timezone.localize(naive_dt)
+# =========================
+# نقطه شروع
+# =========================
 
-                if "date_to" in params and isinstance(params["date_to"], str):
-                    naive_dt = datetime.datetime.fromisoformat(params["date_to"])
-                    params["date_to"] = timezone.localize(naive_dt)
-
-                # تبدیل رشته فلگ به ثابت متاتریدر
-                if "flags" in params and isinstance(params["flags"], str):
-                    params["flags"] = getattr(mt5, params["flags"], mt5.COPY_TICKS_ALL)
-
-                # تبدیل رشته action به حروف کوچک
-                if "action" in params and isinstance(params["action"], str):
-                    params["action"] = params["action"].lower()
-
-                # تبدیل رشته نوع سفارش به ثابت متاتریدر
-                if "order_type" in params and isinstance(params["order_type"], str):
-                    params["order_type"] = getattr(mt5, params["order_type"], mt5.ORDER_TYPE_BUY)
-
-                # تبدیل فیلدهای رشته‌ای داخل دیکشنری request به ثابت‌های متاتریدر
-                if "request" in params and isinstance(params["request"], dict):
-                    request = params["request"]
-                    if "action" in request and isinstance(request["action"], str):
-                        request["action"] = getattr(mt5, request["action"], mt5.TRADE_ACTION_DEAL)
-                    if "type" in request and isinstance(request["type"], str):
-                        request["type"] = getattr(mt5, request["type"], mt5.ORDER_TYPE_BUY)
-                    if "type_time" in request and isinstance(request["type_time"], str):
-                        request["type_time"] = getattr(mt5, request["type_time"], mt5.ORDER_TIME_GTC)
-                    if "type_filling" in request and isinstance(request["type_filling"], str):
-                        request["type_filling"] = getattr(mt5, request["type_filling"], mt5.ORDER_FILLING_IOC)
-
-                # بررسی وجود متد در کلاس
-                if not method_name or not hasattr(instance, method_name):
-                    print(f"Method '{method_name}' not found in class '{class_name}'")
-                    continue
-
-                # دریافت آبجکت متد
-                method = getattr(instance, method_name)
-
-                try:
-                    # فراخوانی داینامیک متد با پارامترهای استخراج شده
-                    print(f"Calling {class_name}.{method_name} with params: {params}")
-                    result = method(**params)
-                    print(f"Result of {method_name}: {result}")
-
-                except TypeError as e:
-                    # مدیریت خطای عدم تطابق پارامترها
-                    print(f"Error calling {method_name}: Invalid parameters - {e}")
-
-        except json.JSONDecodeError:
-            # مدیریت خطای نامعتبر بودن JSON
-            print(f"Invalid JSON in value: {cleaned_value}")
-        except Exception as e:
-            # مدیریت سایر خطاهای پیش‌بینی‌نشده
-            print(f"Error processing message: {e}")
-
-
-# --- نقطه شروع اجرای برنامه ---
-if __name__ == "__main__":
-    # ساخت یک نمونه از شنونده کافکا
+def main() -> None:
+    setup_logging()
     listener = KafkaListener()
-    # شروع به گوش دادن
     listener.listen()
+
+if __name__ == "__main__":
+    main()
