@@ -349,30 +349,70 @@ graph LR
 
 ```mermaid
 sequenceDiagram
-  autonumber
-  participant Prod as Kafka Producer (Client)
-  participant K as Kafka Topic (requests)
-  participant L as kafka_listener.py
-  participant M as Mt5_Manager (meta_trader_manager.py)
-  participant MT5 as MetaTrader 5
-  participant U as mt5_utils.py
-  participant R as kafka_responder.py
-  participant KO as Kafka Topic (responses)
+    box rgba(0, 100, 255, 0.1) External Systems
+        participant Prod as 🚀 Kafka Producer (Client)
+        participant K as 📥 Kafka Topic (requests)
+        participant KO as 📤 Kafka Topic (responses)
+        participant MT5 as 📊 MetaTrader 5 Terminal
+    end
 
-  Prod->>K: Publish Request {request_id, op, params}
-  L->>K: Poll/Consume batch
-  L->>L: Validate & Parse message
-  L->>M: dispatch(op, params, request_id)
-  M->>MT5: Execute op (e.g., place_order/get_quote)
-  MT5-->>M: Raw result / error
-  M->>U: normalize/convert to json-safe
-  U-->>M: normalized_result
-  M-->>L: ResponsePayload {request_id, result|error}
-  L->>R: enqueue for sending
-  R->>U: chunk_if_needed(payload, max_bytes)
-  U-->>R: [{part_no, total, data}, ...]
-  R->>KO: Produce chunks keyed by request_id
-  KO-->>Prod: Client consumes & reassembles
+    box rgba(0, 200, 100, 0.1) Trading Agent Core
+        participant L as 👂 kafka_listener.py
+        participant M as 👑 Mt5_Manager
+        participant U as 🛠️ mt5_utils.py
+        participant R as 📤 kafka_responder.py
+    end
+
+    Note over Prod, KO: 🔄 Request-Response Cycle
+
+    Prod->>K: 📨 Publish Request
+    Note right of Prod: {request_id: "req_123",<br/>op: "place_order",<br/>params: {symbol: "EURUSD"}}
+
+    K->>L: 🔔 Message Batch Available
+    L->>K: ✅ Poll/Consume Messages
+    L->>L: 🔍 Validate & Parse JSON
+    Note right of L: Message validation<br/>Schema checking
+
+    L->>M: 🚀 dispatch(op, params, request_id)
+    Note right of L: Async method invocation<br/>Request tracking
+
+    M->>MT5: ⚡ Execute Operation
+    Note right of M: place_order/get_quote<br/>account_info/fetch_data
+
+    MT5-->>M: 📋 Raw Response
+    Note left of MT5: Native MT5 data structures<br/>Potential errors
+
+    M->>U: 🛠️ normalize_response()
+    Note right of M: Convert to JSON-safe<br/>Handle datetime objects
+
+    U-->>M: 🎯 Normalized Result
+    Note left of U: Serializable data<br/>Error formatting
+
+    M-->>L: 📦 ResponsePayload
+    Note left of M: {request_id: "req_123",<br/>result: {...},<br/>status: "success"}
+
+    L->>R: 📥 enqueue_response()
+    Note right of L: Async queue for<br/>response processing
+
+    R->>U: 📏 chunk_if_needed()
+    Note right of R: max_bytes=900000<br/>Split large responses
+
+    U-->>R: 🧩 Chunk Array
+    Note left of U: [{chunk_id: 1, total: 3, data: ...}]
+
+    R->>KO: 🚀 Produce Chunks
+    Note right of R: Keyed by request_id<br/>Maintains order
+
+    KO-->>Prod: 🔄 Consumer Reassemblies
+    Note left of KO: Client monitors topic<br/>Reconstructs full response
+
+    Prod->>Prod: 🧠 Reassemble & Process
+    Note right of Prod: Validate chunks<br/>Handle missing parts<br/>Final processing
+
+    %% Styling for better visibility
+    rect rgba(0, 0, 0, 0.05)
+        Note over Prod, MT5: 💡 End-to-End Processing Time: ~100-500ms
+    end
 ```
 
 ---
