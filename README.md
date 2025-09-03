@@ -219,33 +219,60 @@ git checkout -b feature/my-change
 
 ```mermaid
 flowchart TB
-    subgraph Ext["External Systems"]
-      MT5(("MetaTrader 5<br/>Terminal/API"))
-      KAFKA[("Kafka Cluster")]
+    classDef external fill:#e1f5fe,stroke:#01579b,stroke-width:2px,color:#01579b;
+    classDef core fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,color:#4a148c;
+    classDef module fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:#1b5e20;
+    classDef data fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#e65100;
+
+    subgraph Ext["🌐 External Systems"]
+        direction LR
+        MT5(("📊 MetaTrader 5<br/>Terminal & API"))
+        KAFKA[("🔌 Kafka Cluster<br/>Brokers & Topics")]
     end
 
-    subgraph App["agent (Python)"]
-      MAIN[["main.py<br/>Entry point"]]
-      CFG[["config_logging.py<br/>Logging & Env"]]
-      MGR[["meta_trader_manager.py<br/>Mt5_Manager"]]
-      LST[["kafka_listener.py<br/>Consumer/Router"]]
-      RSP[["kafka_responder.py<br/>Producer/Chunking"]]
-      UTL[["mt5_utils.py<br/>Serializers & Converters"]]
+    subgraph App["🤖 Trading Agent (Python Application)"]
+        direction TB
+        
+        subgraph Core["⚙️ Core Components"]
+            MAIN[["🚀 main.py<br/>Application Entry Point"]]
+            CFG[["⚡ config_logging.py<br/>Configuration & Logging"]]
+        end
+        
+        subgraph Modules["📦 Functional Modules"]
+            MGR[["👑 meta_trader_manager.py<br/>MT5 Manager Class"]]
+            LST[["👂 kafka_listener.py<br/>Command Consumer & Router"]]
+            RSP[["📤 kafka_responder.py<br/>Response Producer & Chunker"]]
+            UTL[["🛠️ mt5_utils.py<br/>Serializers & Converters"]]
+        end
     end
 
-    MAIN --> CFG
-    MAIN --> MGR
-    MAIN --> LST
-    MAIN --> RSP
-    LST -->|requests| KAFKA
-    RSP -->|responses| KAFKA
-    MGR <-->|trade ops, quotes, account| MT5
-    LST -->|dispatch calls| MGR
-    MGR -->|normalize/serialize| UTL
-    RSP -->|chunking/pack| UTL
-    CFG -->|logger| LST
-    CFG -->|logger| RSP
-    CFG -->|logger| MGR
+    %% External connections
+    LST -.->|"📥 Consumes Commands"| KAFKA
+    RSP -.->|"📤 Produces Responses"| KAFKA
+    MGR <-->|"🔗 Trade Operations<br/>📈 Market Data<br/>💳 Account Info"| MT5
+
+    %% Internal dependencies
+    MAIN -->|"initializes"| CFG
+    MAIN -->|"creates instance"| MGR
+    MAIN -->|"starts"| LST
+    MAIN -->|"configures"| RSP
+    
+    LST -->|"dispatches calls to"| MGR
+    MGR -->|"uses utilities from"| UTL
+    RSP -->|"uses chunking from"| UTL
+    
+    CFG -->|"provides logger to"| LST
+    CFG -->|"provides logger to"| RSP
+    CFG -->|"provides logger to"| MGR
+
+    %% Styling
+    class Ext external;
+    class Core core;
+    class Modules module;
+    class MT5,KAFKA data;
+
+    linkStyle 0,1,2,3 stroke:#ff6f00,stroke-width:2px;
+    linkStyle 4,5,6,7,8,9,10,11 stroke:#7b1fa2,stroke-width:2px;
 ```
 
 ---
