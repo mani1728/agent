@@ -210,3 +210,319 @@ git checkout -b feature/my-change
 
 می‌خوای برای هر ماژول (`Guide.md`‌ها) هم همین سبک **کامنت مخفی Markdown** رو اعمال کنم که تیم وقتی فایل‌ها رو توی GitHub می‌خونه، یادداشت‌های داخلی شما هم قابل دیدن باشه؟
 ```
+
+
+
+---
+
+# معماری کلان (High-level)
+
+```mermaid
+flowchart TB
+    subgraph Ext["External Systems"]
+      MT5(("MetaTrader 5<br/>Terminal/API"))
+      KAFKA[("Kafka Cluster")]
+    end
+
+    subgraph App["agent (Python)"]
+      MAIN[["main.py<br/>Entry point"]]
+      CFG[["config_logging.py<br/>Logging & Env"]]
+      MGR[["meta_trader_manager.py<br/>Mt5_Manager"]]
+      LST[["kafka_listener.py<br/>Consumer/Router"]]
+      RSP[["kafka_responder.py<br/>Producer/Chunking"]]
+      UTL[["mt5_utils.py<br/>Serializers & Converters"]]
+    end
+
+    MAIN --> CFG
+    MAIN --> MGR
+    MAIN --> LST
+    MAIN --> RSP
+    LST -->|requests| KAFKA
+    RSP -->|responses| KAFKA
+    MGR <-->|trade ops, quotes, account| MT5
+    LST -->|dispatch calls| MGR
+    MGR -->|normalize/serialize| UTL
+    RSP -->|chunking/pack| UTL
+    CFG -->|logger| LST
+    CFG -->|logger| RSP
+    CFG -->|logger| MGR
+```
+
+---
+
+# مؤلفه‌ها و وابستگی‌ها (Component Map)
+
+```mermaid
+graph LR
+  subgraph Infra
+    K[(Kafka)]
+    T((MT5))
+  end
+
+  subgraph Agent
+    A1[main.py]
+    A2[config_logging.py]
+    A3[kafka_listener.py]
+    A4[kafka_responder.py]
+    A5[meta_trader_manager.py]
+    A6[mt5_utils.py]
+  end
+
+  A1-->A2
+  A1-->A3
+  A1-->A4
+  A1-->A5
+
+  A3-- consume -->K
+  A4-- produce -->K
+
+  A3-- route -->A5
+  A5-- call/receive -->T
+
+  A5-- uses -->A6
+  A4-- uses -->A6
+  A3-- uses logger -->A2
+  A4-- uses logger -->A2
+  A5-- uses logger -->A2
+```
+
+---
+
+# سکانس جریان درخواست/پاسخ (End-to-End Sequence)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Prod as Kafka Producer (Client)
+  participant K as Kafka Topic (requests)
+  participant L as kafka_listener.py
+  participant M as Mt5_Manager (meta_trader_manager.py)
+  participant MT5 as MetaTrader 5
+  participant U as mt5_utils.py
+  participant R as kafka_responder.py
+  participant KO as Kafka Topic (responses)
+
+  Prod->>K: Publish Request {request_id, op, params}
+  L->>K: Poll/Consume batch
+  L->>L: Validate & Parse message
+  L->>M: dispatch(op, params, request_id)
+  M->>MT5: Execute op (e.g., place_order/get_quote)
+  MT5-->>M: Raw result / error
+  M->>U: normalize/convert to json-safe
+  U-->>M: normalized_result
+  M-->>L: ResponsePayload {request_id, result|error}
+  L->>R: enqueue for sending
+  R->>U: chunk_if_needed(payload, max_bytes)
+  U-->>R: [{part_no, total, data}, ...]
+  R->>KO: Produce chunks keyed by request_id
+  KO-->>Prod: Client consumes & reassembles
+```
+
+---
+
+# دیاگرام کلاس‌ها (Class Diagram)
+
+```mermaid
+classDiagram
+  class Mt5_Manager {
+    +Mt5_Manager(config)
+    +connect(): bool
+    +is_connected: bool
+    +get_account_info(): Dict
+    +get_symbols(filter:str="*"): List~Dict~
+    +get_quote(symbol:str): Dict
+    +place_order(req: OrderRequest): OrderResult
+    +modify_order(id:int, params:Dict): OrderResult
+    +close_order(id:int): OrderResult
+    +shutdown(): void
+    -_ensure_conn(): void
+    -_map_error(code:int): str
+  }
+
+  class KafkaListener {
+    +KafkaListener(cfg, manager, responder)
+    +start(): void
+    +stop(): void
+    +_handle_message(msg): void
+    -_parse_message(raw)->Request
+    -_validate(req)->void
+    -_dispatch(req)->ResponsePayload
+  }
+
+  class KafkaResponder {
+    +KafkaResponder(cfg)
+    +send(payload: ResponsePayload): void
+    +flush(): void
+    -_chunk(bytes, max_size)->List~Chunk~
+    -_serialize(obj)->bytes
+  }
+
+  class ConfigLogging {
+    +setup_logging(level:str, file:str?): Logger
+    +load_env()->Dict
+  }
+
+  class Mt5Utils {
+    <<utility>>
+    +to_json_safe(obj)->Any
+    +decimal_to_float(d)->float
+    +datetime_to_iso(dt)->str
+    +chunks(b:bytes, n:int)->List~bytes~
+    +validate_order(req)->None|Error
+  }
+
+  class Request {
+    +request_id: str
+    +op: str
+    +params: Dict
+    +ts: datetime
+  }
+
+  class ResponsePayload {
+    +request_id: str
+    +ok: bool
+    +result: Any
+    +error: str?
+    +meta: Dict
+  }
+
+  Mt5_Manager <.. Mt5Utils : uses
+  KafkaResponder <.. Mt5Utils : uses
+  KafkaListener --> Mt5_Manager : dispatch()
+  KafkaListener --> KafkaResponder : enqueue()
+  ConfigLogging <.. KafkaListener : logger
+  ConfigLogging <.. KafkaResponder : logger
+  ConfigLogging <.. Mt5_Manager : logger
+```
+
+---
+
+# وضعیت و چرخهٔ chunking در پاسخ‌گو (State Machine)
+
+```mermaid
+stateDiagram-v2
+  [*] --> Idle
+  Idle --> Serializing : send(payload)
+  Serializing --> NeedsChunking : size > MAX
+  Serializing --> ReadyToSend : size <= MAX
+
+  NeedsChunking --> Chunking
+  Chunking --> ReadyToSend : produced parts[N]
+
+  ReadyToSend --> Sending : produce() per part
+  Sending --> Flushing : last part sent
+  Flushing --> Idle : ack/flush ok
+  Sending --> Error : broker exception
+  Flushing --> Error : timeout
+  Error --> Idle : recover/retry
+```
+
+---
+
+# کانال‌ها و کانفیگ کافکا (Topic/Config Map)
+
+```mermaid
+flowchart LR
+  subgraph Kafka
+    REQ[requests.<env/app>]
+    RES[responses.<env/app>]
+    DLQ[requests.dlq]
+  end
+
+  subgraph App
+    L[kafka_listener.py]
+    R[kafka_responder.py]
+  end
+
+  L -- consume --> REQ
+  L -- on-parse-error --> DLQ
+  R -- produce --> RES
+
+  classDef t fill:#eef,stroke:#88f
+  class REQ,RES,DLQ t
+```
+
+---
+
+# خط لولهٔ راه‌اندازی برنامه (Startup Pipeline)
+
+```mermaid
+sequenceDiagram
+  participant Main as main.py
+  participant Conf as config_logging.py
+  participant M as Mt5_Manager
+  participant L as KafkaListener
+  participant R as KafkaResponder
+
+  Main->>Conf: load_env() + setup_logging()
+  Main->>M: Mt5_Manager(env/config)
+  M-->>Main: is_connected = true/false
+  Main->>R: KafkaResponder(env/config)
+  Main->>L: KafkaListener(env/config, M, R)
+  Main->>L: start()
+  Main-->>Main: run_until_sigint()
+  Main->>L: stop() (on shutdown)
+  Main->>R: flush()
+  Main->>M: shutdown()
+```
+
+---
+
+# قرارداد پیام‌ها (Schemas – پیشنهادی/متعارف)
+
+> اگر اسکیمای دقیق‌تون فرق داره، همین بلوک رو با کلیدهای واقعی‌تون جایگزین کن.
+
+```mermaid
+erDiagram
+  REQUEST {
+    string request_id PK
+    string op
+    json   params
+    string reply_to  "optional"
+    string corr_key  "optional"
+    string ts_iso
+  }
+
+  RESPONSE {
+    string request_id
+    boolean ok
+    json result
+    string error
+    int part_no
+    int total_parts
+    string ts_iso
+  }
+
+  REQUEST ||--o{ RESPONSE : "request_id"
+```
+
+---
+
+# ماتریس عملیات (Op Routing)
+
+```mermaid
+flowchart TB
+  subgraph Listener
+    IN[Request.op]
+    RT{Match op}
+  end
+  subgraph Manager
+    ACC[get_account_info]
+    SYM[get_symbols]
+    QTE[get_quote]
+    PLC[place_order]
+    MOD[modify_order]
+    CLS[close_order]
+  end
+
+  IN --> RT
+  RT -->|account.info| ACC
+  RT -->|symbols.list| SYM
+  RT -->|quote.get| QTE
+  RT -->|order.place| PLC
+  RT -->|order.modify| MOD
+  RT -->|order.close| CLS
+```
+
+---
+
