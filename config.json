@@ -1,0 +1,134 @@
+{
+  // ================== راهنمای کلی ==================
+  // این فایل تمامی "ENV" های قبلی را پوشش می‌دهد.
+  // می‌توانید حین اجرای برنامه این فایل را تغییر دهید؛
+  // برنامه هر چند ثانیه (app.hot_reload_check_sec) تغییرات را می‌خواند.
+  //
+  // نکته: این JSON از کامنت پشتیبانی می‌کند (// و /* */ و #).
+
+  "app": {
+    // محیط اجرا: یکی از مقادیر "dev" | "prod" | "test"
+    // این مقدار صرفاً برای نشانه‌گذاری/تفکیک لاگ‌ها و رفتارهای احتمالی است.
+    "env": "dev",
+
+    // دوره زمانی بررسی تغییرات فایل تنظیمات (بر حسب ثانیه).
+    // مقدار پیشنهادی بین 2 تا 10 ثانیه است.
+    "hot_reload_check_sec": 2
+  },
+
+  "logging": {
+    // سطح لاگ: یکی از "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL"
+    "level": "INFO",
+
+    // اگر true باشد، فرمت لاگ‌ها JSON خواهد بود.
+    "json": false,
+
+    // اگر true، علاوه بر کنسول، در فایل نیز ذخیره می‌شود.
+    "file_enabled": true,
+
+    // مسیر فایل لاگ (در صورت فعال بودن file_enabled)
+    "file_path": "logs/app.log",
+
+    // حداکثر حجم فایل لاگ قبل از گردش (Rotation)
+    "max_bytes": 5000000,
+
+    // تعداد فایل‌های بکاپ لاگ که نگهداری می‌شود
+    "backup_count": 3
+  },
+
+  "kafka": {
+    // اگر false باشد تمام قسمت‌های مربوط به Kafka غیرفعال می‌شوند.
+    "enabled": true,
+
+    // آدرس یا آدرس‌های سرور کافکا (host:port).
+    // مثال‌ها: ["localhost:9092"] یا ["10.0.0.10:9092","10.0.0.11:9092"]
+    "bootstrap_servers": ["localhost:9092"],
+
+    // شناسه کلاینت (برای متغیرهای قالبی در نام تاپیک‌ها نیز استفاده می‌شود)
+    "client_id": "client-001",
+
+    // شناسه گروه مصرف‌کننده برای Listener
+    "group_id": "mt5-service",
+
+    // پروتکل امنیتی: "PLAINTEXT" | "SASL_PLAINTEXT" | "SASL_SSL" | "SSL"
+    // اگر نیاز به احراز هویت در کافکا دارید، مقادیر زیر را نیز پر کنید.
+    "security_protocol": "PLAINTEXT",
+    "sasl_mechanism": "PLAIN",
+    "sasl_username": "",
+    "sasl_password": "",
+
+    // تنظیمات تولیدکننده (Producer)
+    // acks: "0" | "1" | "all"
+    "acks": "all",
+    "retries": 3,
+    "linger_ms": 5,
+    "request_timeout_ms": 30000,
+
+    // تنظیمات مصرف‌کننده (Consumer)
+    // auto_offset_reset: "latest" | "earliest"
+    "consumer_auto_offset_reset": "latest",
+    "enable_auto_commit": true,
+    "session_timeout_ms": 45000,
+
+    "topics": {
+      // لیست تاپیک‌های دستورات. می‌توانید از قالب {client_id} استفاده کنید.
+      // قرارداد اولویت: نام تاپیک با ".p0" ، ".p1" ، ".p2" ختم شود (0=بیشترین اولویت).
+      "commands": ["cmd.{client_id}.p0", "cmd.{client_id}.p1", "cmd.{client_id}.p2"],
+
+      // تاپیک پاسخ‌ها
+      "replies": "server.replies",
+
+      // تاپیک وضعیت کلاینت‌ها (اختیاری)
+      "status": "clients.status"
+    }
+  },
+
+  "auth": {
+    // اگر true باشد، هر پیام ورودی باید دارای توکن معتبر باشد.
+    "token_required": false,
+
+    // دیکشنری از client_id -> token. مثال:
+    // {"client-001": "changeme-token", "client-xyz": "secret-value"}
+    "tokens": {
+      "client-001": "changeme-token"
+    },
+
+    // نام کلیدی که انتظار داریم توکن در آن ارسال شود (در payload)
+    // مثال: اگر "auth_token" باشد، باید payload["auth_token"] موجود باشد.
+    "header_key": "auth_token"
+  },
+
+  "mt5": {
+    // شماره لاگین اکانت متاتریدر 5 (عدد صحیح)
+    "login": 0,
+
+    // پسورد اکانت
+    "password": "",
+
+    // نام یا آدرس سرور بروکر
+    "server": "",
+
+    // مسیر ترمینال MT5 (در برخی سیستم‌ها ضروری است)
+    "path": "",
+
+    // تایم‌اوت پیش‌فرض عملیات (ثانیه)
+    "timeout_sec": 10,
+
+    // لیست سیمبل‌های رایج
+    "symbols": ["EURUSD", "XAUUSD"],
+
+    // تایم‌زون منطقی برای پردازش داده‌ها
+    "timezone": "UTC"
+  },
+
+  "executor": {
+    // تعداد تِرِدهای اجرا برای پردازش همزمان درخواست‌ها
+    "max_workers": 4,
+
+    // لیست سطوح اولویت مجاز. 0=بالاترین اولویت
+    "priority_levels": [0, 1, 2],
+
+    // حداکثر اندازه صف
+    "queue_maxsize": 100
+  }
+}
