@@ -511,7 +511,9 @@ classDiagram
 
 ---
 
+***
 # وضعیت و چرخهٔ chunking در پاسخ‌گو (State Machine)
+***
 
 ```mermaid
 stateDiagram-v2
