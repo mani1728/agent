@@ -2,224 +2,372 @@
 """
 priority_executor.py
 --------------------
-مدیر صف‌های اولویت‌دار داخل کلاینت + Aging + قفل‌های حوزه‌ای + ورکرهای موازی.
+موتور اجرای تسک‌ها با «اولویت»، «Aging (ارتقای تدریجی)»، «قفل‌های حوزه‌ای (ordering_scope)» و «ورکرهای موازی».
 
-نحوه‌ی کار:
-- submit() را با اطلاعات فرمان (headers+body) صدا بزن؛ ماژول پیام را به یکی از 10 صف 1..10 اضافه می‌کند.
-- یک ترد Aging هر 5 ثانیه پیام‌های قدیمی را یک پله به اولویت بالاتر (عدد کوچک‌تر) منتقل می‌کند.
-- ورکرها به ترتیب از صف‌های مهم‌تر برمی‌دارند و اجرا می‌کنند.
-- اگر ordering_scope (مثل per-symbol:EURUSD) تعیین شده باشد، برای همان scope قفل می‌گذاریم تا نظم حفظ شود.
-- یک ورکر به‌صورت رزرو‌شده کم‌اهمیت‌ها (6..10) را سرویس می‌دهد تا هرگز قفل کامل نشوند.
+تفاوت کلیدی این نسخه:
+- به‌جای بازهٔ ثابت 1..10، لیستِ اولویت‌ها را از config.json می‌خواند: executor.priority_levels
+  * پیش‌فرض config: [0, 1, 2]  (۰ = بالاترین اولویت)
+- صف‌ها دقیقاً بر اساس همین لیست ساخته می‌شوند (مثلاً ۳ صف برای [0,1,2]).
+- Aging بر مبنای اندیسِ اولویت در لیست اجرا می‌شود (هر بار یک پله به سمت اندیس کمتر).
+- پارامترهای اصلی (max_workers/queue_maxsize/...) از config.json خوانده می‌شوند (هات‌ریلُد-فرندلی).
 
-وابستگی‌ها: استاندارد پایتون. نیاز به کافکا ندارد؛ فقط تابع‌های اجرایی/پاسخ‌دهی را از بیرون می‌گیرد.
+کلیدهای مرتبط در config.json:
+-----------------------------
+executor.max_workers     : تعداد ورکرها (پیش‌فرض 4)
+executor.priority_levels : لیست سطوح اولویت (پیش‌فرض [0,1,2]؛ ۰ = بالاترین)
+executor.queue_maxsize   : حداکثر اندازهٔ صف (پیش‌فرض 100)
+
+کلیدهای اختیاری (اگر نبودند، پیش‌فرض امن استفاده می‌شود):
+executor.reserved_low_slots   : تعداد ورکر رزرو برای Low (پیش‌فرض 1)
+executor.aging_step_seconds   : بازهٔ اجرای Aging (ثانیه) (پیش‌فرض 5)
+executor.aging_step_amount    : پلهٔ ارتقا در هر چرخهٔ Aging (پیش‌فرض 1)
+executor.idle_sleep           : خواب کوتاه ورکر در بی‌کاری (ثانیه) (پیش‌فرض 0.05)
+executor.max_exec_ms_default  : حداکثر زمان اجرای تسک در صورت نبود max_exec_ms در هدر (میلی‌ثانیه) (پیش‌فرض 3000)
+
+قراردادها:
+- priority هر تسک باید یکی از مقادیر موجود در executor.priority_levels باشد؛ اگر نباشد، نرمال‌سازی می‌شود
+  (نزدیک‌ترین مقدار موجود در لیست انتخاب می‌گردد).
+- ordering_scope اگر تعیین شود، برای همان scope قفل می‌گذاریم تا نظم حفظ شود (تسک‌های هم‌دامنه هم‌زمان اجرا نشوند).
+- TTL/Deadline قبل از اجرا بررسی می‌شود؛ در صورت انقضا، پاسخ "expired" بازگردانده می‌شود.
+
+وابستگی‌ها: فقط استاندارد پایتون + config_manager
 """
 
-import time
-import threading
-from collections import deque, defaultdict
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Tuple, List
-from datetime import datetime, timedelta, timezone
+from __future__ import annotations                     # ✔ تایپ‌هینت مدرن
+import time                                            # ✔ زمان/خواب
+import threading                                       # ✔ تردها و قفل‌ها
+from collections import deque, defaultdict             # ✔ صف و دیکشنری پیش‌فرض‌ساز
+from dataclasses import dataclass, field               # ✔ تعریف ساختار دادهٔ تسک
+from typing import Any, Callable, Dict, Optional, Tuple, List  # ✔ تایپ‌ها
+from datetime import datetime, timezone                # ✔ مهر زمان ISO
+import bisect                                          # ✔ برای نرمال‌سازی عدد اولویت
+import logging                                         # ✔ لاگ استاندارد
+from config_manager import cfg                         # ✔ خواندن تنظیمات از config.json (هات‌ریلُد)
 
-# ---- انواع ساده برای خوانایی کد ----
-
+# ------------------------------------------------------------------------------
+# ساختار دادهٔ «تسک فرمان» (ورودی موتور)
+# ------------------------------------------------------------------------------
 @dataclass
 class CommandTask:
     """
     ساختار داده‌ی یک تسک فرمان.
     """
-    corr_id: str                         # شماره پیگیری (هم‌بستگی)
-    client_id: str                       # شناسه‌ی کلاینتِ هدف (خود ما)
-    priority: int                        # اولویت اولیه 1..10 (1 فوری‌ترین)
-    headers: Dict[str, str]              # هدرهای ورودی پیام
-    body: Dict[str, Any]                 # بدنه‌ی فرمان (class, method, args, ...)
+    corr_id: str                         # شناسهٔ پیگیری (Correlation Id)
+    client_id: str                       # شناسهٔ کلاینتِ هدف (خود ما)
+    priority: int                        # سطح اولویت (عضوی از executor.priority_levels)
+    headers: Dict[str, Any]              # هدرهای ورودی پیام (می‌تواند max_exec_ms داشته باشد)
+    body: Dict[str, Any]                 # بدنهٔ فرمان (class, method, args, ...)
     ordering_scope: Optional[str] = None # کلید حوزه (مثلاً per-symbol:EURUSD)
     ttl_ms: Optional[int] = None         # TTL برحسب میلی‌ثانیه (اختیاری)
-    deadline_ts: Optional[float] = None  # یونیکس‌تایم ثانیه (اختیاری)
+    deadline_ts: Optional[float] = None  # یونیکس‌تایم (ثانیه) برای ددلاین مطلق (اختیاری)
     received_ts: float = field(default_factory=lambda: time.time())  # زمان دریافت پیام (ثانیه)
-    last_aged_ts: float = field(default_factory=lambda: time.time()) # آخرین بار که Aging اعمال شد
-    # اختیاری برای ارسال پاسخ
-    extra: Dict[str, Any] = field(default_factory=dict)
+    last_aged_ts: float = field(default_factory=lambda: time.time()) # آخرین بار اعمال Aging
+    extra: Dict[str, Any] = field(default_factory=dict)              # داده‌های اضافهٔ اختیاری
 
-
+# ------------------------------------------------------------------------------
+# کلاس موتور اولویت‌دار
+# ------------------------------------------------------------------------------
 class PriorityExecutor:
     """
-    موتور اجرای اولویت‌دار با Aging و قفل‌های درون‌حوزه‌ای.
+    موتور اجرای اولویت‌دار با Aging و قفل‌های دامنه‌ای.
+    تنظیمات از config.json خوانده می‌شود (هات‌ریلُد در نقاط حساس).
     """
 
+    # ------------------------------- سازنده -------------------------------
     def __init__(
         self,
         *,
-        workers: int = 4,                 # تعداد کل ورکرها
-        reserved_low_slots: int = 1,      # چند ورکر مخصوص 6..10 رزرو شوند
-        aging_step_seconds: int = 5,      # هر چند ثانیه یک پله Aging
-        # اگر بخواهیم Aging سریع‌تر/آهسته‌تر باشد
-        aging_step_amount: int = 1,       # هر گام چند پله ارتقا (معمولاً 1)
-        # محدوده‌ی Low برای رزرو
-        low_range: Tuple[int, int] = (6, 10),
-        # مهلت اجرای پیش‌فرض اگر max_exec_ms در پیام نبود
-        max_exec_ms_default: int = 3000,
-        # توابع تزریق‌شونده:
-        execute_func: Optional[Callable[[CommandTask], Tuple[str, Dict[str, Any]]]] = None,
-        # باید تابعی باشد که پاسخ را ارسال کند (کافکا یا هرچیز دیگر)
-        reply_callback: Optional[Callable[[CommandTask, str, Dict[str, Any]], None]] = None,
-        # تایمر خواب کوتاه بین تلاش‌ها
-        idle_sleep: float = 0.05,
-        logger: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
+        execute_func: Optional[Callable[[CommandTask], Tuple[str, Dict[str, Any]]]] = None,  # تابع اجرایی بیرونی
+        reply_callback: Optional[Callable[[CommandTask, str, Dict[str, Any]], None]] = None, # تابع ارسال پاسخ
+        logger: Optional[logging.Logger] = None,                                             # لاگر اختیاری
     ):
-        # لاگر ساده: logger(level, message, extra)
-        self.log = logger or self._fallback_log
+        # ✔ لاگر: اگر پاس داده نشود، یک لاگر با نام کلاس برمی‌داریم
+        self._log = logger or logging.getLogger(self.__class__.__name__)
 
-        # پارامترها
-        self.workers = max(1, workers)
-        self.reserved_low_slots = max(0, min(reserved_low_slots, self.workers))
-        self.aging_step_seconds = max(1, aging_step_seconds)
-        self.aging_step_amount = max(1, aging_step_amount)
-        self.low_range = low_range
-        self.max_exec_ms_default = max_exec_ms_default
-        self.idle_sleep = idle_sleep
-
-        # هوک‌های بیرونی
+        # ✔ توابع تزریق‌شونده (باید از بیرون داده شوند)
         self.execute_func = execute_func
         self.reply_callback = reply_callback
 
-        # صف‌ها: 10 صف از 1..10 (1 بالاترین اولویت)
-        self.queues: Dict[int, deque] = {p: deque() for p in range(1, 11)}
+        # ✔ خواندن تنظیمات فعلی از config.json
+        self._refresh_conf()
 
-        # قفل سراسری برای دسترسی به صف‌ها
+        # ✔ ساخت صف‌ها بر اساس لیستِ اولویت‌ها (برای هر سطح، یک deque)
+        self.queues: Dict[int, deque] = {p: deque() for p in self.priority_levels}
+
+        # ✔ قفل سراسری برای دسترسی به صف‌ها
         self.q_lock = threading.RLock()
 
-        # قفل‌های درون‌حوزه‌ای: هر scope یک Lock
+        # ✔ قفل‌های دامنه‌ای (ordering_scope → Lock)
         self.scope_locks: Dict[str, threading.Lock] = defaultdict(threading.Lock)
 
-        # کنترل تردها
+        # ✔ کنترل تردها
         self._stop_event = threading.Event()
         self._aging_thread: Optional[threading.Thread] = None
         self._worker_threads: List[threading.Thread] = []
 
-        # شمارنده‌ها
-        self._seq = 0  # فقط برای دیباگ/لاگ
+        # ✔ شمارندهٔ داخلی (برای دیباگ)
+        self._seq = 0
 
-    # --------------- ابزارهای داخلی ---------------
+    # --------------------------- خواندن/هات‌ریلُد کانفیگ ---------------------------
+    def _refresh_conf(self) -> None:
+        """
+        خواندن تنظیمات از config.json (هات‌ریلُد-فرندلی).
+        اگر کلیدی موجود نباشد، مقدار پیش‌فرض امن گذاشته می‌شود.
+        """
+        c = cfg()                                     # سینگلتون پیکربندی
+        ec = c.get("executor", {}) or {}
 
-    def _fallback_log(self, level: str, msg: str, extra: Dict[str, Any] = None):
-        # لاگ سادهٔ چاپی
-        print(f"[{level.upper()}] {msg} {extra or ''}")
+        # لیست سطوح اولویت (مثلاً [0,1,2] یا [0,1,2,3,4])
+        self.priority_levels: List[int] = list(ec.get("priority_levels", [0, 1, 2]))
+        # مرتب‌سازی مطمئن (کوچک‌تر = اولویت بالاتر)
+        self.priority_levels.sort()
 
+        # تعداد ورکرها
+        self.max_workers: int = int(ec.get("max_workers", 4))
+
+        # حداکثر اندازهٔ صف (در این پیاده‌سازی به صورت soft-limit استفاده می‌شود)
+        self.queue_maxsize: int = int(ec.get("queue_maxsize", 100))
+
+        # پارامترهای اختیاری (اگر در config نبودند، پیش‌فرض امن داریم)
+        self.reserved_low_slots: int   = int(ec.get("reserved_low_slots", 1))
+        self.aging_step_seconds: int   = int(ec.get("aging_step_seconds", 5))
+        self.aging_step_amount: int    = int(ec.get("aging_step_amount", 1))
+        self.idle_sleep: float         = float(ec.get("idle_sleep", 0.05))
+        self.max_exec_ms_default: int  = int(ec.get("max_exec_ms_default", 3000))
+
+        # محاسبهٔ مجموعهٔ Low برای رزرو ورکرها:
+        # تعریف: «نیمهٔ پایینِ لیست اولویت‌ها» (اندیس بزرگ‌تر = اولویت پایین‌تر)
+        # مثال: [0,1,2,3] → Low = {2,3}  ،  [0,1,2] → Low = {1,2}
+        half = max(1, len(self.priority_levels) // 2)
+        self.low_levels = set(self.priority_levels[-half:])
+
+        # ایجاد نگاشت «اولویت → اندیس» برای aging (کمک می‌کند یک پله جلو/عقب برویم)
+        self._prio_to_index: Dict[int, int] = {p: i for i, p in enumerate(self.priority_levels)}
+
+        # رشته‌های لاگ برای آگاهی
+        self._log.info(
+            "Executor config refreshed: priorities=%s, workers=%d, reserved_low=%d, aging=%ds(+%d), idle=%.2fs",
+            self.priority_levels, self.max_workers, self.reserved_low_slots,
+            self.aging_step_seconds, self.aging_step_amount, self.idle_sleep
+        )
+
+    # ------------------------------- توابع کمکی -------------------------------
     def _now(self) -> float:
+        """زمان یونیکس (ثانیه) برای محاسبات داخلی."""
         return time.time()
 
     def _utc_iso(self) -> str:
+        """زمان فعلی به ISO8601 در UTC (برای متادیتاها)."""
         return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
 
-    def _within_low_range(self, p: int) -> bool:
-        lo, hi = self.low_range
-        return lo <= p <= hi
-
-    # --------------- API عمومی ---------------
-
-    def start(self):
+    def _nearest_priority(self, p: int) -> int:
         """
-        استارت Aging و ورکرها.
+        نرمال‌سازی «عدد اولویت» به نزدیک‌ترین مقدار موجود در priority_levels.
+        اگر p دقیقاً در لیست نباشد، نزدیک‌ترین عضو انتخاب می‌شود.
+        """
+        levels = self.priority_levels
+        # یافتن محل درج با bisect
+        i = bisect.bisect_left(levels, p)
+        if i == 0:
+            return levels[0]
+        if i == len(levels):
+            return levels[-1]
+        # انتخاب نزدیک‌ترین
+        before, after = levels[i-1], levels[i]
+        return before if abs(p - before) <= abs(after - p) else after
+
+    def _higher_priority(self, p: int) -> int:
+        """
+        یک پله «بهتر» (اولویت بالاتر) نسبت به p برمی‌گرداند.
+        در صورت رسیدن به بالاترین، همان p را می‌دهد.
+        """
+        idx = self._prio_to_index.get(p, 0)
+        new_idx = max(0, idx - self.aging_step_amount)
+        return self.priority_levels[new_idx]
+
+    # ------------------------------- API عمومی -------------------------------
+    def start(self) -> None:
+        """
+        استارت Aging و ورکرها. (ایمن در برابر استارت دوباره)
         """
         if self._aging_thread and self._aging_thread.is_alive():
             return
 
+        # هات‌ریلُد کانفیگ در لحظهٔ استارت (برای زمان اجرا)
+        self._refresh_conf()
+
         self._stop_event.clear()
+
         # ترد Aging
         self._aging_thread = threading.Thread(target=self._aging_loop, name="priority-aging", daemon=True)
         self._aging_thread.start()
 
-        # تردهای ورکر:
-        # اول reserved_low_slots تا worker را برای Low رزرو می‌کنیم
-        for i in range(self.reserved_low_slots):
+        # ساخت/استارت ورکرها:
+        # ابتدا reserved_low_slots ورکر برای Low
+        for i in range(min(self.reserved_low_slots, self.max_workers)):
             t = threading.Thread(target=self._worker_loop, args=(True, i), name=f"worker-low-{i}", daemon=True)
             t.start()
             self._worker_threads.append(t)
-        # بقیه High→Low
-        for i in range(self.reserved_low_slots, self.workers):
+
+        # بقیه ورکرها High→Low
+        for i in range(len(self._worker_threads), self.max_workers):
             t = threading.Thread(target=self._worker_loop, args=(False, i), name=f"worker-hilo-{i}", daemon=True)
             t.start()
             self._worker_threads.append(t)
 
-        self.log("info", "PriorityExecutor started", {"workers": self.workers, "reserved_low": self.reserved_low_slots})
+        self._log.info(
+            "PriorityExecutor started (workers=%d, reserved_low=%d, levels=%s)",
+            self.max_workers, self.reserved_low_slots, self.priority_levels
+        )
 
-    def stop(self, timeout: float = 2.0):
+    def stop(self, timeout: float = 2.0) -> None:
         """
         توقف امن: ترد Aging و ورکرها را متوقف می‌کند.
         """
         self._stop_event.set()
-        # تردها بطور طبیعی پایان می‌یابند
         for t in self._worker_threads:
             t.join(timeout=timeout)
         if self._aging_thread:
             self._aging_thread.join(timeout=timeout)
+        self._log.info("PriorityExecutor stopped.")
 
-    def submit(self, task: CommandTask):
+    def submit(self, task: CommandTask) -> None:
         """
         افزودن یک تسک به صف مناسب (بر اساس priority).
+        - priority اگر در لیست نبود، به نزدیک‌ترین مقدار نرمال می‌شود.
+        - ظرفیت صف به صورت soft-limit است (در صورت نیاز می‌توانید آسان اضافه کنید).
         """
-        # اولویت را داخل بازه‌ی 1..10 نگه می‌داریم
-        p = max(1, min(10, int(task.priority or 5)))
-        task.priority = p  # normalize
+        # هات‌ریلُد احتمالی (اگر در حین اجرا config تغییر کرده باشد)
+        self._refresh_conf()
+
+        # نرمال‌سازی اولویت به نزدیک‌ترین مقدار مجاز
+        p = self._nearest_priority(int(task.priority))
+        task.priority = p
 
         with self.q_lock:
+            # کنترل ظرفیت نرم: اگر خیلی بزرگ شد، همچنان قبول می‌کنیم اما قابل مانیتور است
+            if self.queue_maxsize and sum(len(q) for q in self.queues.values()) >= self.queue_maxsize:
+                self._log.warning("Queue soft-limit reached (size≈%d)", self.queue_maxsize)
             self.queues[p].append(task)
             self._seq += 1
-            self.log("debug", "task queued", {"p": p, "corr_id": task.corr_id, "scope": task.ordering_scope})
+            self._log.debug("Task queued", extra={"p": p, "corr_id": task.corr_id, "scope": task.ordering_scope})
 
-    # --------------- Aging ---------------
-
-    def _aging_loop(self):
+    # ------------------------------- Aging -------------------------------
+    def _aging_loop(self) -> None:
         """
-        هر aging_step_seconds، پیام‌های مانده را یک «پله» ارتقا می‌دهد (مثلاً از 8 به 7).
-        برای کارایی، ما فقط پیام‌هایی را که حداقل aging_step_seconds از last_aged_ts‌شان گذشته، جابجا می‌کنیم.
+        هر aging_step_seconds، پیام‌های مانده را یک «پله» به سمت اولویت بهتر ارتقا می‌دهد.
+        معیار: از آخرین ارتقای خود (last_aged_ts) حداقل aging_step_seconds گذشته باشد.
         """
         while not self._stop_event.is_set():
-            time.sleep(self.aging_step_seconds)
+            time.sleep(max(1, int(self.aging_step_seconds)))
             now = self._now()
 
             try:
-                moved_count = 0
+                moved = 0
                 with self.q_lock:
-                    # از پایین به بالا حرکت می‌کنیم (10..2) و هرکدام را در صورت نیاز به پله‌ی بالاتر می‌بریم
-                    for p in range(10, 1, -1):
+                    # از «پایین‌ترین اولویت‌ها» به سمت بالا حرکت می‌کنیم تا ارتقا درست انجام شود
+                    for p in reversed(self.priority_levels):
                         q = self.queues[p]
-                        # برای جلوگیری از چرخشِ بی‌پایان، فقط اندازه‌ی فعلی صف را بازرسی می‌کنیم
-                        for _ in range(len(q)):
+                        for _ in range(len(q)):  # فقط اندازهٔ فعلی؛ از حلقهٔ بی‌نهایت جلوگیری
                             task = q.popleft()
-                            # اگر به‌اندازه‌ی کافی عمر کرده، و هنوز جا برای ارتقا هست
+                            # اگر به زمان Aging رسیده باشد
                             if (now - task.last_aged_ts) >= self.aging_step_seconds:
-                                # چند پله ارتقا (معمولاً 1)
-                                new_p = max(1, task.priority - self.aging_step_amount)
-                                # اگر ارتقا اتفاق افتاد
-                                if new_p < task.priority:
+                                new_p = self._higher_priority(task.priority)
+                                if new_p != task.priority:
                                     task.priority = new_p
                                     task.last_aged_ts = now
                                     self.queues[new_p].append(task)
-                                    moved_count += 1
+                                    moved += 1
                                 else:
-                                    # ارتقا نداشت، سرجایش بماند
+                                    # در بالاترین اولویت است؛ همان صف بماند
                                     q.append(task)
                             else:
-                                # هنوز نوبت Aging این تسک نرسیده، همان صف خودش
+                                # هنوز نوبت Aging این تسک نرسیده
                                 q.append(task)
-                if moved_count:
-                    self.log("debug", "aging moved tasks", {"count": moved_count})
+                if moved:
+                    self._log.debug("Aging moved tasks", extra={"count": moved})
             except Exception as e:
-                self.log("warn", "aging loop error", {"error": str(e)})
+                self._log.warning("Aging loop error: %s", str(e))
 
-    # --------------- انتخاب و اجرای تسک ---------------
+    # ------------------------ انتخاب و اجرای تسک ------------------------
+    def _pick_next_task(self, reserved_low: bool) -> Optional[CommandTask]:
+        """
+        انتخاب تسک بعدی:
+        - اگر reserved_low=True: ابتدا بین «سطوح Low» می‌گردد؛ اگر نبود → کل سطوح از بالا به پایین.
+        - اگر reserved_low=False: کل سطوح از بالا (بهترین) تا پایین.
+        """
+        with self.q_lock:
+            if reserved_low:
+                # ابتدا Lowها (نیمهٔ پایین)
+                for p in self.priority_levels:
+                    if p in self.low_levels and self.queues[p]:
+                        return self.queues[p].popleft()
+                # برای جلوگیری از بیکاری، از بالا به پایین
+                for p in self.priority_levels:
+                    if self.queues[p]:
+                        return self.queues[p].popleft()
+            else:
+                # از بالاترین به پایین‌ترین
+                for p in self.priority_levels:
+                    if self.queues[p]:
+                        return self.queues[p].popleft()
+        return None
 
-    def _worker_loop(self, reserved_low: bool, index: int):
+    def _run_with_timeout(self, task: CommandTask, max_exec_ms: int) -> Tuple[str, Dict[str, Any]]:
+        """
+        اجرای تابع بیرونی با محدودیت زمان.
+        توجه: در پایتون ترد را واقعاً kill نمی‌کنیم؛ اگر دیرتر شد، TimeoutError می‌دهیم.
+        """
+        if self.execute_func is None:
+            raise RuntimeError("execute_func تزریق نشده است.")
+
+        result_holder: Dict[str, Any] = {"status": "error", "result": {}}
+        finished = threading.Event()
+
+        def runner():
+            try:
+                st, rs = self.execute_func(task)   # تابع باید (status, dict) بدهد
+                result_holder["status"] = st
+                result_holder["result"] = rs
+            except Exception as e:
+                result_holder["status"] = "error"
+                result_holder["result"] = {"reason": str(e)}
+            finally:
+                finished.set()
+
+        th = threading.Thread(target=runner, daemon=True)
+        th.start()
+        ok = finished.wait(timeout=max_exec_ms / 1000.0)
+        if not ok:
+            # ترد runner ممکن است ادامه دهد؛ ما پاسخ timeout می‌دهیم
+            raise TimeoutError("execution timeout")
+        return result_holder["status"], result_holder["result"]
+
+    def _reply_status(self, task: CommandTask, status: str, result: Dict[str, Any]) -> None:
+        """
+        فراخوانی کال‌بک پاسخ (مثلاً ارسال به Kafka) با corr_id و متادیتاها.
+        """
+        try:
+            if self.reply_callback is None:
+                self._log.warning("reply_callback not set; dropping reply", extra={"corr_id": task.corr_id})
+                return
+            self.reply_callback(task, status, result)
+        except Exception as e:
+            self._log.warning("reply_callback failed: %s", str(e), extra={"corr_id": task.corr_id})
+
+    def _worker_loop(self, reserved_low: bool, index: int) -> None:
         """
         حلقهٔ اصلی هر ورکر:
-        - اگر reserved_low=True → ابتدا 6..10 را اسکن می‌کند؛ اگر نبود، برای جلوگیری از بیکاری به High→Low برمی‌گردد.
-        - اگر reserved_low=False → High→Low (1..10) را اسکن می‌کند.
+        - reserved_low=True → ابتدا Lowها؛ اگر نبود، از بالا به پایین برای جلوگیری از بیکاری.
+        - reserved_low=False → همیشه از بالا به پایین (بهترین → پایین‌ترین).
         """
         name = threading.current_thread().name
-        self.log("info", "worker started", {"name": name, "reserved_low": reserved_low})
+        self._log.info("Worker started", extra={"name": name, "reserved_low": reserved_low})
+
         while not self._stop_event.is_set():
+            # هات‌ریلُد سبکِ کانفیگ (در حلقهٔ ورکر)
+            self._refresh_conf()
+
             task = self._pick_next_task(reserved_low=reserved_low)
             if task is None:
                 time.sleep(self.idle_sleep)
@@ -229,11 +377,9 @@ class PriorityExecutor:
             now = self._now()
             expired = False
 
-            # deadline_ts اگر تعیین شده بود و گذشته باشد → منقضی
             if task.deadline_ts is not None and now > task.deadline_ts:
                 expired = True
 
-            # ttl_ms اگر تعیین شده بود و از زمان دریافت گذشته باشد → منقضی
             if task.ttl_ms is not None:
                 if (now - task.received_ts) * 1000.0 > float(task.ttl_ms):
                     expired = True
@@ -242,16 +388,17 @@ class PriorityExecutor:
                 self._reply_status(task, status="expired", result={"reason": "deadline/ttl exceeded"})
                 continue
 
-            # قفل حوزه (اگر scope تعریف شده بود)
+            # قفل حوزه‌ای در صورت وجود ordering_scope
             lock_acquired = False
             scope_lock = None
             if task.ordering_scope:
                 scope_lock = self.scope_locks[task.ordering_scope]
-                lock_acquired = scope_lock.acquire(timeout=0.1)  # تلاش کوتاه برای جلوگیری از بن‌بست
+                # تلاش کوتاه برای جلوگیری از بن‌بست
+                lock_acquired = scope_lock.acquire(timeout=0.1)
                 if not lock_acquired:
-                    # اگر قفل نبود، تسک را به همان صف خودش برگردانیم تا بعداً دوباره تلاش شود
+                    # اگر قفل نشد، تسک را جلوی صف خودش برگردان و کمی بخواب
                     with self.q_lock:
-                        self.queues[task.priority].appendleft(task)  # اول صف تا زودتر دوباره امتحان شود
+                        self.queues[task.priority].appendleft(task)
                     time.sleep(self.idle_sleep)
                     continue
 
@@ -260,11 +407,7 @@ class PriorityExecutor:
             status = "error"
             result: Dict[str, Any] = {}
             try:
-                # تعیین max_exec_ms مؤثر
                 max_exec_ms = int(task.headers.get("max_exec_ms", self.max_exec_ms_default))
-                # اجرای تابع بیرونی (باید از بیرون تزریق شده باشد)
-                if self.execute_func is None:
-                    raise RuntimeError("execute_func تزریق نشده است.")
                 status, result = self._run_with_timeout(task, max_exec_ms)
             except TimeoutError:
                 status = "timeout"
@@ -273,7 +416,6 @@ class PriorityExecutor:
                 status = "error"
                 result = {"reason": str(e)}
             finally:
-                # آزاد کردن قفل حوزه
                 if lock_acquired and scope_lock:
                     try:
                         scope_lock.release()
@@ -281,75 +423,12 @@ class PriorityExecutor:
                         pass
 
             elapsed_ms = int((self._now() - start) * 1000.0)
-            # افزودن متادیتا
-            result_meta = {"elapsed_ms": elapsed_ms, "effective_priority": task.priority}
+            # افزودن متادیتا به نتیجه
+            meta = {"elapsed_ms": elapsed_ms, "effective_priority": task.priority, "ts": self._utc_iso()}
             if isinstance(result, dict):
-                result.setdefault("meta", {}).update(result_meta)
+                result.setdefault("meta", {}).update(meta)
             else:
-                result = {"result": result, "meta": result_meta}
+                result = {"result": result, "meta": meta}
 
-            # پاسخ
+            # ارسال پاسخ
             self._reply_status(task, status=status, result=result)
-
-    def _pick_next_task(self, reserved_low: bool) -> Optional[CommandTask]:
-        """
-        انتخاب بعدی:
-        - اگر reserved_low=True: ابتدا 6..10؛ اگر نبود → 1..10 برای جلوگیری از بیکاری
-        - اگر reserved_low=False: 1..10
-        """
-        with self.q_lock:
-            if reserved_low:
-                # ابتدا low-range
-                for p in range(self.low_range[0], self.low_range[1] + 1):
-                    if self.queues[p]:
-                        return self.queues[p].popleft()
-                # اگر low نبود، از high→low برای جلوگیری از بیکاری
-                for p in range(1, 11):
-                    if self.queues[p]:
-                        return self.queues[p].popleft()
-            else:
-                # high→low
-                for p in range(1, 11):
-                    if self.queues[p]:
-                        return self.queues[p].popleft()
-        return None
-
-    def _run_with_timeout(self, task: CommandTask, max_exec_ms: int) -> Tuple[str, Dict[str, Any]]:
-        """
-        اجرای تابع بیرونی با محدودیت زمان. در پایتون ترد را «واقعاً» kill نمی‌کنیم،
-        اما از طریق یک روال ساده، اگر دیرتر شد، TimeoutError می‌دهیم.
-        """
-        res_holder: Dict[str, Any] = {"status": "error", "result": {}}
-        finished = threading.Event()
-
-        def runner():
-            try:
-                st, rs = self.execute_func(task)  # تابع بیرونی باید (status, result_dict) برگرداند
-                res_holder["status"] = st
-                res_holder["result"] = rs
-            except Exception as e:
-                res_holder["status"] = "error"
-                res_holder["result"] = {"reason": str(e)}
-            finally:
-                finished.set()
-
-        th = threading.Thread(target=runner, daemon=True)
-        th.start()
-        ok = finished.wait(timeout=max_exec_ms / 1000.0)
-        if not ok:
-            # توجه: ترد runner همچنان ممکن است پشت‌صحنه ادامه دهد؛ پاسخ timeout می‌دهیم
-            raise TimeoutError("execution timeout")
-        return res_holder["status"], res_holder["result"]
-
-    def _reply_status(self, task: CommandTask, status: str, result: Dict[str, Any]):
-        """
-        فراخوانی کال‌بک پاسخ (کافکا…) با corr_id/priority و ...
-        """
-        try:
-            if self.reply_callback is None:
-                self.log("warn", "reply_callback not set; dropping reply", {"corr_id": task.corr_id})
-                return
-            self.reply_callback(task, status, result)
-        except Exception as e:
-            self.log("warn", "reply_callback failed", {"error": str(e), "corr_id": task.corr_id})
-
