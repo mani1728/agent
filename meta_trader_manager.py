@@ -1,242 +1,348 @@
-# meta_trader_manager.py
-# کلاس Mt5_Manager برای مدیریت تعامل با MetaTrader 5
-# این نسخه بهینه‌سازی شده با مدیریت خطا، تبدیل خروجی‌ها به قالب‌های خوانا،
-# سازگاری با پیام‌های Kafka و پشتیبانی کامل از متدها/اکشن‌های مورد نیاز است.
+# -*- coding: utf-8 -*-
+"""
+meta_trader_manager.py
+----------------------
+کلاس Mt5_Manager برای مدیریت تعامل با MetaTrader 5 با خواندن «تمام تنظیمات» از config.json
+و پشتیبانی کامل از «هات‌ریلُد» (بدون نیاز به ری‌استارت سرویس).
+
+ویژگی‌ها:
+- عدم استفاده از ENV؛ همه‌چیز از config.json خوانده می‌شود (از طریق config_manager.cfg()).
+- پیش‌فرض‌ها: از بخش "mt5" در config.json (login/password/server/path/timeout_sec/symbols/timezone).
+- هر متد، در زمان اجرا، آخرین مقادیر کانفیگ را می‌خواند (هات‌ریلُد واقعی).
+- مدیریت اتصال (initialize/login/info/version/account/shutdown)
+- مدیریت نمادها (total/get/info/tick/select)
+- عمق بازار (market_book add/get/release)
+- داده‌های تاریخی (rates/ticks با روش‌های from/from_pos/range)
+- مدیریت معاملات (total/get/calc_margin/calc_profit/check/send)
+- پوزیشن‌ها و تاریخچه (positions_*/history_*)
+
+پیش‌نیاز:
+- MetaTrader5 (کتابخانه رسمی mt5)
+- pandas (برای DataFrame)
+- pytz (برای timezone)
+- config_manager.py (نسخهٔ هات‌ریلُد که قبلاً نوشتیم)
+
+نکته امنیتی:
+- رمزها و اطلاعات اتصال را در config.json مدیریت کنید؛ این فایل ENV نمی‌خواهد.
+"""
+
+from __future__ import annotations               # ✅ تایپ‌هینت‌های مدرن (سازگاری پایتون 3.8+)
+import logging                                   # ✅ لاگ‌گیری یکپارچه (سازگار با config_logging.py)
+import datetime as dt                            # ✅ کار با تاریخ/زمان
+import time                                      # ✅ تأخیرهای کوتاه در ارسال سفارش/ریترای
+from typing import Any, Dict, List, Optional, Union  # ✅ تایپ‌ها برای خوانایی
+
+import pytz                                      # ✅ مدیریت timezone
+import pandas as pd                              # ✅ کار با DataFrame
+import MetaTrader5 as mt5                        # ✅ کتابخانه رسمی MetaTrader5
+
+from config_manager import cfg                   # ✅ دسترسی به پیکربندی هات‌ریلُد
 
 # -----------------------------
-# وارد کردن کتابخانه‌های لازم
+# ابزارهای کمکی داخلی (بدون وابستگی به فایل دیگر)
 # -----------------------------
-import MetaTrader5 as mt5  # کتابخانه رسمی MT5 برای پایتون
-import pandas as pd        # برای DataFrame و کار با داده‌ها
-import datetime            # کار با تاریخ/زمان
-import pytz                # مدیریت timezone (UTC و ...)
-import time                # تاخیرهای کوتاه بین درخواست‌ها (مثلاً ارسال سفارش)
-from typing import Any, Dict, List, Optional, Union  # تایپ‌ هینت‌ها برای خوانایی بهتر
 
+def _parse_iso_dt(s: Union[str, dt.datetime, None], tz: pytz.BaseTzInfo) -> Optional[dt.datetime]:
+    """
+    ✅ پارس تاریخ/زمان ورودی به datetime آگاه از timezone:
+    - اگر None باشد → None
+    - اگر datetime باشد → در صورت naive، timezone را اعمال می‌کنیم؛ وگرنه به tz تبدیل می‌کنیم.
+    - اگر str باشد (ISO با یا بدون 'Z') → تبدیل به datetime آگاه از tz.
+    """
+    if s is None:
+        return None
+    if isinstance(s, dt.datetime):
+        return s if s.tzinfo else tz.localize(s)
+    if not isinstance(s, str):
+        raise ValueError("datetime must be ISO string or datetime")
 
-# ---------------------------------------
-# تعریف کلاس اصلی مدیریت MetaTrader 5
-# ---------------------------------------
+    # پشتیبانی از 'Z' در انتها
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        obj = dt.datetime.fromisoformat(s)
+    except Exception:
+        # fallback: تبدیل فاصله به T
+        obj = dt.datetime.fromisoformat(s.replace(" ", "T"))
+    if obj.tzinfo is None:
+        return tz.localize(obj)
+    return obj.astimezone(tz)
+
+def _safe_asdict(obj: Any) -> Any:
+    """
+    ✅ تبدیل امن آبجکت‌های برگشتی MT5 به dict برای سریال‌سازی/لاگ:
+    - اگر _asdict داشت → dict
+    - اگر لیست از namedtupleها بود → لیست dict
+    - اگر pandas بود → به شکل مناسب
+    - در غیراینصورت همان را برمی‌گردانیم
+    """
+    # namedtuple/structs
+    if hasattr(obj, "_asdict"):
+        try:
+            return obj._asdict()
+        except Exception:
+            return str(obj)
+    if isinstance(obj, list):
+        out = []
+        for x in obj:
+            out.append(_safe_asdict(x))
+        return out
+    # pandas
+    try:
+        if isinstance(obj, pd.DataFrame):
+            return {
+                "preview": obj.head(20).to_dict(orient="records"),
+                "columns": list(obj.columns),
+                "rows": int(getattr(obj, "shape", [0, 0])[0]),
+            }
+        if isinstance(obj, pd.Series):
+            return obj.to_dict()
+    except Exception:
+        pass
+    return obj
+
+def _comma_join(servers: Union[List[str], str]) -> str:
+    """
+    ✅ کافکا/شبکه بعضاً رشتهٔ comma-separated می‌خواهد؛
+    این تابع لیستِ ['host:port', ...] را به 'a,b,c' تبدیل می‌کند.
+    برای MT5 لازم نیست، ولی نگه‌داشتیم اگر لازم شد.
+    """
+    if isinstance(servers, list):
+        return ",".join(servers)
+    return str(servers)
+
+# -----------------------------
+# کلاس اصلی مدیریت MT5
+# -----------------------------
 class Mt5_Manager:
-    # سازنده کلاس: آماده‌سازی مقادیر پیش‌فرض و وضعیت اتصال
+    """
+    ✅ تمام رفتارهای مرتبط با MetaTrader 5 با تکیه بر config.json
+    - مقادیر پیش‌فرض را «هر بار» از cfg().get("mt5.*") می‌خوانیم (هات‌ریلُد)
+    - اگر ورودی‌های متد را ارسال کنید، همان‌ها بر کانفیگ مقدم‌اند.
+    """
+
     def __init__(self):
-        self.default_path: Optional[str] = None          # مسیر ترمینال در صورت نیاز (اختیاری)
-        self.default_login: Optional[int] = None         # لاگین پیش‌فرض (اختیاری)
-        self.default_password: Optional[str] = None      # پسورد پیش‌فرض (اختیاری)
-        self.default_server: Optional[str] = None        # نام سرور پیش‌فرض (اختیاری)
-        self.terminal_info = None                        # کش اطلاعات ترمینال
-        self.version = None                              # کش نسخه MT5
-        self.account_info_dict: Dict[str, Any] = {}      # کش اطلاعات حساب به‌صورت dict
-        self.utc_tz = pytz.timezone("Etc/UTC")           # منطقه زمانی UTC برای تاریخ‌های history
-        # نکته: اتصال واقعی در متد manage_connection انجام می‌شود، اینجا فقط آماده‌سازی است.
+        # ✅ logger ماژول؛ سطح/فرمت توسط setup_logging() خارج از این فایل تعیین می‌شود.
+        self.log = logging.getLogger("Mt5_Manager")
 
-    # -----------------------------
-    # ابزارهای کمکی داخلی
-    # -----------------------------
+    # ------------- ابزار داخلی خواندن کانفیگ MT5 -------------
+
+    def _mt5_cfg(self) -> Dict[str, Any]:
+        """
+        ✅ خواندن آخرین بخش mt5 از config.json (هات‌ریلُد)
+        ساختار مورد انتظار در config.json:
+        "mt5": {
+          "login": 0, "password": "", "server": "", "path": "",
+          "timeout_sec": 10, "symbols": ["EURUSD","XAUUSD"], "timezone": "UTC"
+        }
+        """
+        return cfg().get("mt5", {}) or {}
+
+    def _tz(self) -> pytz.BaseTzInfo:
+        """
+        ✅ استخراج timezone از کانفیگ (mt5.timezone). اگر اشتباه بود → UTC.
+        """
+        tz_name = (self._mt5_cfg().get("timezone") or "UTC").strip() or "UTC"
+        try:
+            return pytz.timezone(tz_name)
+        except Exception:
+            self.log.warning("Invalid timezone in config: %s (fallback to UTC)", tz_name)
+            return pytz.timezone("UTC")
+
+    def _default_symbol(self) -> Optional[str]:
+        """
+        ✅ انتخاب یک نماد پیش‌فرض از mt5.symbols در config.json (اگر موجود باشد).
+        """
+        syms = self._mt5_cfg().get("symbols") or []
+        if isinstance(syms, list) and syms:
+            return str(syms[0])
+        return None
+
+    # ------------- ابزارهای داخلی وضعیت/نماد/پیش‌نمایش -------------
+
     def _ensure_initialized(self) -> bool:
-        """بررسی می‌کند که ترمینال MT5 وصل است؛ در غیراینصورت تلاش می‌کند از وضعیت فعلی info بگیرد."""
-        info = mt5.terminal_info()  # گرفتن اطلاعات فعلی ترمینال
-        if info and getattr(info, "connected", False):   # اگر متصل است
-            return True                                  # اوکی
-        print("MT5 not initialized/connected.")          # اطلاع برای دیباگ
-        return False                                     # عدم اتصال
+        """
+        ✅ بررسی اتصال فعلی به ترمینال MT5.
+        اگر connected=False باشد، False برمی‌گرداند.
+        """
+        info = mt5.terminal_info()
+        if info and getattr(info, "connected", False):
+            return True
+        self.log.debug("MT5 not initialized/connected.")
+        return False
 
-    def _symbol_sanity(self, symbol: str) -> bool:
-        """اطمینان از اینکه نماد انتخاب و فعال است؛ در صورت لزوم فعال‌سازی می‌کند."""
-        if not symbol:                                   # اگر نماد خالی بود
-            print("Symbol is empty.")                    # چاپ هشدار
-            return False                                 # خروج
-        info = mt5.symbol_info(symbol)                   # اطلاعات نماد
-        if info is None:                                 # اگر نماد نامعتبر بود
-            print(f"Symbol '{symbol}' not found.")       # هشدار
+    def _symbol_sanity(self, symbol: Optional[str]) -> bool:
+        """
+        ✅ اطمینان از اینکه نماد معتبر و visible است؛ در صورت لزوم فعال‌سازی (symbol_select).
+        اگر symbol خالی بود سعی می‌کنیم از پیش‌فرض کانفیگ برداریم.
+        """
+        sym = symbol or self._default_symbol()
+        if not sym:
+            self.log.error("Symbol is empty and no default symbol found in config.")
             return False
-        if not info.visible:                             # اگر نماد در MarketWatch غیرفعال است
-            if not mt5.symbol_select(symbol, True):      # تلاش برای فعال‌سازی
-                print(f"Failed to select symbol '{symbol}', err={mt5.last_error()}")  # خطا
+
+        info = mt5.symbol_info(sym)
+        if info is None:
+            self.log.error("Symbol '%s' not found.", sym)
+            return False
+        if not info.visible:
+            if not mt5.symbol_select(sym, True):
+                self.log.error("Failed to select symbol '%s', err=%s", sym, mt5.last_error())
                 return False
-        return True                                      # نماد آماده است
+        return True
 
-    def _dt(self, dt: Union[str, datetime.datetime, None]) -> Optional[datetime.datetime]:
-        """تبدیل ورودی به datetime آگاه از UTC (اگر رشته باشد)."""
-        if dt is None:                                   # اگر چیزی ندادند
-            return None                                  # None برگردان
-        if isinstance(dt, datetime.datetime):            # اگر خودش datetime است
-            return dt if dt.tzinfo else self.utc_tz.localize(dt)  # timezone دارش کن
-        # اگر رشته ISO باشد (main.py از قبل به datetime تبدیل می‌کند، اما برای ایمنی اینجا هم پشتیبانی می‌کنیم)
+    def _df_preview(self, df: Optional[pd.DataFrame], name: str = "") -> None:
+        """
+        ✅ برای دیباگ: چند ردیف اول DataFrame را لاگ می‌کنیم (نه print).
+        """
+        if df is None:
+            return
         try:
-            if dt.endswith("Z"):                         # پشتیبانی از Z انتهای ISO
-                dt = dt[:-1] + "+00:00"                  # تبدیل Z به +00:00
-            obj = datetime.datetime.fromisoformat(dt)    # تبدیل به datetime
-            return obj if obj.tzinfo else self.utc_tz.localize(obj)  # timezone
+            rows = int(getattr(df, "shape", [0, 0])[0])
+            self.log.debug("DF preview (%s) rows=%d\n%s", name, rows, df.head(10))
         except Exception:
-            print(f"Invalid datetime format: {dt}")      # هشدار فرمت اشتباه
-            return None
-
-    def _df_preview(self, df: pd.DataFrame, name: str = "") -> None:
-        """برای دیباگ: نمایش چند ردیف اول DataFrame."""
-        rows = df.shape[0] if isinstance(df, pd.DataFrame) else 0  # تعداد ردیف
-        print(f"\nDisplay dataframe preview ({name}) - rows={rows}")  # چاپ وضعیت
-        try:
-            print(df.head(10))                            # چاپ 10 ردیف اول
-        except Exception:
-            pass                                          # اهمیتی ندارد اگر df خیلی بزرگ است
+            pass
 
     # ---------------------------------------------------
-    # 1) مدیریت اتصال به ترمینال (initialize/login/...)
+    # 1) مدیریت اتصال (initialize/login/info/version/account/shutdown)
     # ---------------------------------------------------
     def manage_connection(
         self,
-        action: str,                         # اکشن درخواستی: initialize/login/terminal_info/version/account_info/shutdown
-        path: Optional[str] = None,          # مسیر ترمینال (اختیاری)
-        login: Optional[int] = None,         # لاگین (اختیاری)
-        password: Optional[str] = None,      # پسورد (اختیاری)
-        server: Optional[str] = None,        # نام سرور (اختیاری)
-        timeout: int = 60000,                # تایم‌اوت اتصال
-        portable: bool = False               # حالت پرتابل (در صورت نیاز)
+        action: str,                         # "initialize" | "login" | "terminal_info" | "version" | "account_info" | "shutdown"
+        path: Optional[str] = None,          # مسیر ترمینال (بر کانفیگ مقدم است)
+        login: Optional[int] = None,         # لاگین (بر کانفیگ مقدم است)
+        password: Optional[str] = None,      # پسورد (بر کانفیگ مقدم است)
+        server: Optional[str] = None,        # نام سرور (بر کانفیگ مقدم است)
+        timeout: Optional[int] = None,       # تایم‌اوت اتصال (ms) (اگر None → از کانفیگ)
+        portable: bool = False               # حالت پرتابل
     ) -> Optional[Union[bool, Dict[str, Any], List[Any], str]]:
-        """مدیریت اتصال به MT5 (initialize/login/info/version/account/shutdown)."""
+        """
+        ✅ اتصال به MT5 و دریافت اطلاعات مرتبط با ترمینال/اکانت.
+        - تمام پارامترهای خالی از کانفیگ mt5 پر می‌شوند (هات‌ریلُد).
+        """
+        action = (action or "").lower().strip()
+        allowed = {"initialize", "login", "terminal_info", "version", "account_info", "shutdown"}
+        if action not in allowed:
+            self.log.error("Invalid action: %s - allowed=%s", action, sorted(allowed))
+            return None
 
-        # یکسان‌سازی حروف اکشن برای اطمینان
-        action = (action or "").lower()      # اکشن را به حروف کوچک تبدیل کن
+        # 📥 خواندن مقادیر از کانفیگ (در لحظه)
+        m = self._mt5_cfg()
+        path = path if path is not None else (m.get("path") or None)
+        login = login if login is not None else (m.get("login") or None)
+        password = password if password is not None else (m.get("password") or None)
+        server = server if server is not None else (m.get("server") or None)
+        # timeout در کانفیگ برحسب «ثانیه» آمده؛ mt5.initialize انتظار ms دارد
+        timeout_ms = int((timeout if timeout is not None else int(m.get("timeout_sec") or 10)) * 1000)
 
-        # بررسی اکشن مجاز
-        allowed = {"initialize", "login", "terminal_info", "version", "account_info", "shutdown"}  # لیست مجاز
-        if action not in allowed:            # اگر اکشن نامعتبر بود
-            print(f"Invalid action: {action}. Allowed: {sorted(allowed)}")  # چاپ خطا
-            return None                      # خروج
-
-        # جایگزینی با مقادیر پیش‌فرض اگر پارامترها خالی باشند
-        path = path or self.default_path
-        login = login or self.default_login
-        password = password or self.default_password
-        server = server or self.default_server
-
-        # اکشن initialize: تلاش برای اتصال کامل با پارامترها
+        # --- initialize ---
         if action == "initialize":
-            # اگر از قبل متصل است، فقط کش را به‌روزرسانی کن
-            info = mt5.terminal_info()                               # اطلاعات ترمینال
-            if info and getattr(info, "connected", False):           # اگر وصل است
-                print("MT5 already connected, skipping initialize")  # پیام
-                self.terminal_info = info                            # کش اطلاعات ترمینال
-                self.version = mt5.version()                         # کش نسخه
-                return True                                          # موفقیت
+            info = mt5.terminal_info()
+            if info and getattr(info, "connected", False):
+                self.log.info("MT5 already connected; skipping initialize.")
+                return True
 
-            print(f"mt5_init called: path={path}, login={login}, server={server}")  # چاپ جزئیات اتصال
-            ok = mt5.initialize(                                     # فراخوانی initialize اصلی کتابخانه
-                path=path, login=login, password=password, server=server,
-                timeout=timeout, portable=portable
-            )
-            if not ok:                                               # اگر اتصال موفق نبود
-                print(f"Failed to initialize MT5. err={mt5.last_error()}")  # چاپ خطا
-                return None                                          # خروج
-            self.terminal_info = mt5.terminal_info()                 # کش ترمینال
-            self.version = mt5.version()                             # کش نسخه
-            return True                                              # موفقیت
+            self.log.info("mt5.initialize(path=%s, login=%s, server=%s, timeout_ms=%s, portable=%s)",
+                          path, login, server, timeout_ms, portable)
+            ok = mt5.initialize(path=path, login=login, password=password, server=server,
+                                timeout=timeout_ms, portable=portable)
+            if not ok:
+                self.log.error("Failed to initialize MT5. err=%s", mt5.last_error())
+                return None
+            return True
 
-        # اکشن login: اگر initialize شده، لاگین مجدد به حساب
+        # --- login ---
         if action == "login":
-            if not self._ensure_initialized():                       # باید ابتدا initialize انجام شده باشد
-                print("MT5 not initialized. Call initialize first.") # پیام راهنما
+            if not self._ensure_initialized():
+                self.log.error("MT5 not initialized. Call initialize first.")
                 return None
-            # تابع login در MT5 برای سوئیچ حساب/ورود مجدد
-            success = mt5.login(login=login, password=password, server=server)  # تلاش لاگین
-            if not success:                                          # اگر لاگین موفق نبود
-                print(f"Failed to login to {login}@{server}. err={mt5.last_error()}")  # چاپ خطا
+            ok = mt5.login(login=login, password=password, server=server)
+            if not ok:
+                self.log.error("Failed to login to %s@%s. err=%s", login, server, mt5.last_error())
                 return None
-            acc = mt5.account_info()                                  # اطلاعات حساب بعد از لاگین
-            if acc is None:                                          # اگر نگرفت
-                print(f"Failed to read account_info after login. err={mt5.last_error()}")  # خطا
-                return None
-            self.account_info_dict = acc._asdict()                    # ذخیره دیکشنری
-            return self.account_info_dict                             # برگرداندن خروجی
+            acc = mt5.account_info()
+            return _safe_asdict(acc) if acc else None
 
-        # اکشن terminal_info: برگرداندن اطلاعات ترمینال
+        # --- terminal_info ---
         if action == "terminal_info":
-            info = mt5.terminal_info()                                # اطلاعات ترمینال
+            info = mt5.terminal_info()
             if info is None:
-                print(f"Failed to get terminal_info. err={mt5.last_error()}")  # چاپ خطا
+                self.log.error("Failed to get terminal_info. err=%s", mt5.last_error())
                 return None
-            self.terminal_info = info                                 # کش
-            return info._asdict()                                     # دیکشنری قابل سریال
+            return _safe_asdict(info)
 
-        # اکشن version: برگرداندن نسخه MT5
+        # --- version ---
         if action == "version":
-            self.version = mt5.version()                              # گرفتن نسخه
-            return {"version": self.version}                          # برگرداندن در قالب dict
+            ver = mt5.version()
+            return {"version": ver}
 
-        # اکشن account_info: برگرداندن اطلاعات حساب
+        # --- account_info ---
         if action == "account_info":
-            acc = mt5.account_info()                                  # خواندن اطلاعات حساب
+            acc = mt5.account_info()
             if acc is None:
-                print(f"Failed to get account_info. err={mt5.last_error()}")  # خطا
+                self.log.error("Failed to get account_info. err=%s", mt5.last_error())
                 return None
-            self.account_info_dict = acc._asdict()                    # کش
-            return self.account_info_dict                             # خروجی
+            return _safe_asdict(acc)
 
-        # اکشن shutdown: بستن اتصال
+        # --- shutdown ---
         if action == "shutdown":
-            mt5.shutdown()                                            # قطع اتصال
-            print("MT5 shutdown called.")                             # پیام
-            return True                                               # اتمام موفق
+            mt5.shutdown()
+            self.log.info("MT5 shutdown called.")
+            return True
 
-        return None                                                   # حالت غیرمنتظره
+        return None
 
     # -------------------------------------
-    # 2) مدیریت نمادها (total/get/info/...)
+    # 2) مدیریت نمادها (total/get/info/tick/select)
     # -------------------------------------
     def manage_symbols(
         self,
-        action: str,                          # اکشن: total/get/info/tick/select
+        action: str,                          # "total" | "get" | "info" | "tick" | "select"
         symbol: Optional[str] = None,         # نماد هدف
-        group: Optional[str] = None,          # گروه فیلتر (برای get)
-        enable: bool = True                   # فعال/غیرفعال کردن در select
+        group: Optional[str] = None,          # فیلتر group برای get
+        enable: bool = True                   # وضعیت در select
     ) -> Optional[Union[int, Dict[str, Any], List[Any], bool]]:
-        """عملیات مربوط به نمادها مثل total/get/info/tick/select."""
-
-        action = (action or "").lower()       # یکسان‌سازی اکشن
-        if action not in {"total", "get", "info", "tick", "select"}:  # اعتبارسنجی اکشن
-            print(f"Invalid action for manage_symbols: {action}")     # خطا
+        """
+        ✅ عملیات مرتبط با نمادها؛ اگر symbol خالی باشد از پیش‌فرض کانفیگ استفاده می‌شود.
+        """
+        action = (action or "").lower().strip()
+        if action not in {"total", "get", "info", "tick", "select"}:
+            self.log.error("Invalid action for manage_symbols: %s", action)
             return None
 
-        if action == "total":                 # تعداد کل نمادهای موجود
-            total = mt5.symbols_total()       # فراخوانی API
-            print(f"Symbols total: {total}")  # چاپ
-            return total                      # خروجی عددی
+        if action == "total":
+            total = mt5.symbols_total()
+            self.log.debug("symbols_total=%s", total)
+            return total
 
-        if action == "get":                   # لیست نمادها با فیلتر group
-            syms = mt5.symbols_get(group or "*")  # فراخوانی API با گروه
-            if syms is None:                      # اگر نتیجه None شد
-                print(f"Failed to get symbols. err={mt5.last_error()}")  # خطا
+        if action == "get":
+            syms = mt5.symbols_get(group or "*")
+            if syms is None:
+                self.log.error("symbols_get failed. err=%s", mt5.last_error())
                 return None
-            print(f"Fetched {len(syms)} symbols for group='{group or '*'}'")  # چاپ
-            return [s._asdict() for s in syms]                                # تبدیل به dict
+            return [_safe_asdict(s) for s in syms]
 
-        if action == "info":                 # اطلاعات یک نماد
-            if not self._symbol_sanity(symbol):  # اطمینان از آماده بودن نماد
+        if action == "info":
+            if not self._symbol_sanity(symbol):
                 return None
-            info = mt5.symbol_info(symbol)       # گرفتن اطلاعات
-            if info is None:                     # اگر پیدا نشد
-                print(f"Failed to get symbol_info({symbol}). err={mt5.last_error()}")  # خطا
-                return None
-            return info._asdict()                # خروجی dict
+            info = mt5.symbol_info(symbol or self._default_symbol())
+            return _safe_asdict(info) if info else None
 
-        if action == "tick":                 # آخرین تیک قیمت نماد
-            if not self._symbol_sanity(symbol):  # آماده‌سازی نماد
+        if action == "tick":
+            if not self._symbol_sanity(symbol):
                 return None
-            tick = mt5.symbol_info_tick(symbol)  # دریافت آخرین تیک
-            if tick is None:                     # خطا
-                print(f"Failed to get tick for {symbol}. err={mt5.last_error()}")  # چاپ خطا
-                return None
-            return tick._asdict()                # خروجی dict
+            tick = mt5.symbol_info_tick(symbol or self._default_symbol())
+            return _safe_asdict(tick) if tick else None
 
-        if action == "select":              # فعال/غیرفعال کردن نماد
-            if not symbol:
-                print("select action requires 'symbol'.")  # نیاز به نماد
+        if action == "select":
+            target = symbol or self._default_symbol()
+            if not target:
+                self.log.error("select requires symbol (no default found).")
                 return None
-            ok = mt5.symbol_select(symbol, enable)         # تغییر وضعیت
+            ok = mt5.symbol_select(target, enable)
             if not ok:
-                print(f"Failed to symbol_select({symbol}, {enable}). err={mt5.last_error()}")  # خطا
-            return bool(ok)                                 # خروجی بولی
+                self.log.error("symbol_select(%s,%s) failed. err=%s", target, enable, mt5.last_error())
+            return bool(ok)
 
         return None
 
@@ -245,37 +351,39 @@ class Mt5_Manager:
     # -----------------------------------------
     def manage_market_book(
         self,
-        action: str,                        # اکشن: add/get/release
+        action: str,                        # "add" | "get" | "release"
         symbol: Optional[str] = None        # نماد هدف
     ) -> Optional[Union[List[Dict[str, Any]], bool]]:
-        """مدیریت عمق بازار نماد (market_book) شامل add/get/release."""
-
-        action = (action or "").lower()     # یکسان‌سازی اکشن
-        if action not in {"add", "get", "release"}:  # اعتبارسنجی
-            print(f"Invalid action for manage_market_book: {action}")  # خطا
+        """
+        ✅ مدیریت عمق بازار برای نماد؛ add/get/release
+        """
+        action = (action or "").lower().strip()
+        if action not in {"add", "get", "release"}:
+            self.log.error("Invalid action for manage_market_book: %s", action)
             return None
 
-        if not self._symbol_sanity(symbol):  # آماده‌سازی نماد
+        if not self._symbol_sanity(symbol):
             return None
+        target = symbol or self._default_symbol()
 
-        if action == "add":                 # افزودن اشتراک عمق بازار
-            ok = mt5.market_book_add(symbol)  # فراخوانی API
+        if action == "add":
+            ok = mt5.market_book_add(target)
             if not ok:
-                print(f"Failed to market_book_add({symbol}). err={mt5.last_error()}")  # خطا
-            return bool(ok)                  # خروجی بولی
+                self.log.error("market_book_add(%s) failed. err=%s", target, mt5.last_error())
+            return bool(ok)
 
-        if action == "get":                 # گرفتن اسنپ‌شات عمق بازار
-            book = mt5.market_book_get(symbol)  # فراخوانی API
+        if action == "get":
+            book = mt5.market_book_get(target)
             if book is None:
-                print(f"Failed to market_book_get({symbol}). err={mt5.last_error()}")  # خطا
+                self.log.error("market_book_get(%s) failed. err=%s", target, mt5.last_error())
                 return None
-            return [b._asdict() for b in book]  # خروجی لیست dict
+            return [_safe_asdict(b) for b in book]
 
-        if action == "release":            # لغو اشتراک عمق بازار
-            ok = mt5.market_book_release(symbol)  # فراخوانی API
+        if action == "release":
+            ok = mt5.market_book_release(target)
             if not ok:
-                print(f"Failed to market_book_release({symbol}). err={mt5.last_error()}")  # خطا
-            return bool(ok)                 # خروجی بولی
+                self.log.error("market_book_release(%s) failed. err=%s", target, mt5.last_error())
+            return bool(ok)
 
         return None
 
@@ -284,136 +392,139 @@ class Mt5_Manager:
     # -----------------------------------------
     def fetch_data(
         self,
-        symbol: str,                          # نماد هدف
-        data_type: str = "rates",             # نوع داده: "rates" یا "ticks"
-        method: str = "from",                 # روش: "from" | "from_pos" | "range"
-        timeframe: Any = mt5.TIMEFRAME_M1,    # تایم‌فریم برای rates (main.py رشته‌ها را به کانستنت تبدیل می‌کند)
-        count: int = 100,                     # تعداد داده برای "from" یا "from_pos"
-        date_from: Optional[datetime.datetime] = None,  # شروع بازه
-        date_to: Optional[datetime.datetime] = None,    # پایان بازه
-        flags: Any = mt5.COPY_TICKS_ALL       # فلگ‌های ticks (COPY_TICKS_* )
+        symbol: Optional[str] = None,           # نماد هدف؛ اگر None → از کانفیگ
+        data_type: str = "rates",               # "rates" | "ticks"
+        method: str = "from",                   # "from" | "from_pos" | "range"
+        timeframe: Any = mt5.TIMEFRAME_M1,      # کانستنت mt5 (در صورت رشته، خودتان نگاشت کنید قبل از فراخوانی)
+        count: int = 100,                       # تعداد برای from/from_pos
+        date_from: Optional[Union[str, dt.datetime]] = None,  # شروع بازه
+        date_to: Optional[Union[str, dt.datetime]] = None,    # پایان بازه
+        flags: Any = mt5.COPY_TICKS_ALL         # برای ticks: COPY_TICKS_*
     ) -> Optional[Dict[str, Any]]:
-        """دریافت داده‌های تاریخی rates/ticks با روش‌های متنوع."""
-
-        # بررسی اتصال
-        if not self._ensure_initialized():       # باید متصل باشیم
+        """
+        ✅ دریافت داده‌های تاریخی rates/ticks.
+        - تاریخ‌ها (str یا datetime) با timezone کانفیگ تبدیل می‌شوند (هات‌ریلُد).
+        - symbol اگر None باشد، از mt5.symbols[0] کانفیگ برداشته می‌شود.
+        """
+        # اتصال
+        if not self._ensure_initialized():
             return None
 
-        # آماده‌سازی نماد
-        if not self._symbol_sanity(symbol):      # نماد باید فعال باشد
+        # symbol آماده
+        if not self._symbol_sanity(symbol):
             return None
+        target = symbol or self._default_symbol()
 
-        data_type = (data_type or "").lower()    # نوع داده
-        method = (method or "").lower()          # روش دریافت
-
-        # اعتبارسنجی پارامترها
+        # تنظیم نوع و روش
+        data_type = (data_type or "").lower().strip()
+        method = (method or "").lower().strip()
         if data_type not in {"rates", "ticks"}:
-            print(f"Invalid data_type: {data_type}. Must be 'rates' or 'ticks'.")  # خطا
+            self.log.error("Invalid data_type: %s", data_type)
             return None
         if method not in {"from", "from_pos", "range"}:
-            print(f"Invalid method: {method}. Must be 'from', 'from_pos', or 'range'.")  # خطا
+            self.log.error("Invalid method: %s", method)
             return None
 
-        # --- دریافت داده‌ها بر اساس نوع و روش ---
-        raw_data = []                             # ظرف خروجی خام
-        df: Optional[pd.DataFrame] = None         # DataFrame برای پیش‌نمایش
+        # منطقه زمانی از کانفیگ
+        tz = self._tz()
+        # پارس تاریخ‌ها
+        dfrom = _parse_iso_dt(date_from, tz) if date_from is not None else None
+        dto = _parse_iso_dt(date_to, tz) if date_to is not None else None
+
+        df: Optional[pd.DataFrame] = None
+        rows = []
 
         try:
-            if data_type == "rates":              # اگر نرخ‌ها (OHLCV)
-                if method == "from":              # از یک تاریخ مشخص با count
-                    if not date_from:             # اگر تاریخ شروع نداریم
-                        print("fetch_data(rates/from) requires 'date_from'.")  # راهنما
+            if data_type == "rates":
+                if method == "from":
+                    if not dfrom:
+                        self.log.error("fetch_data(rates/from) requires 'date_from'.")
                         return None
-                    df_arr = mt5.copy_rates_from(symbol, timeframe, date_from, count)  # فراخوانی API
-                elif method == "from_pos":        # از یک ایندکس شروع با count
-                    df_arr = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)      # فراخوانی
-                else:                              # "range" → بازه‌ی زمانی
-                    if not date_from or not date_to:                                   # نیاز به بازه
-                        print("fetch_data(rates/range) requires 'date_from' and 'date_to'.")  # راهنما
+                    arr = mt5.copy_rates_from(target, timeframe, dfrom, count)
+                elif method == "from_pos":
+                    arr = mt5.copy_rates_from_pos(target, timeframe, 0, count)
+                else:  # range
+                    if not (dfrom and dto):
+                        self.log.error("fetch_data(rates/range) requires 'date_from' and 'date_to'.")
                         return None
-                    df_arr = mt5.copy_rates_range(symbol, timeframe, date_from, date_to)      # فراخوانی
+                    arr = mt5.copy_rates_range(target, timeframe, dfrom, dto)
 
-                if df_arr is None:                 # اگر داده‌ای نیامد
-                    print(f"Failed to copy rates. err={mt5.last_error()}")  # خطا
+                if arr is None:
+                    self.log.error("copy_rates_* failed. err=%s", mt5.last_error())
                     return None
 
-                df = pd.DataFrame(df_arr)          # ساخت DataFrame
-                if df.shape[0] > 0:                # اگر ردیف داریم
-                    df["time"] = pd.to_datetime(df["time"], unit="s")  # تبدیل timestamp به datetime
+                df = pd.DataFrame(arr)
+                if df.shape[0] > 0 and "time" in df.columns:
+                    df["time"] = pd.to_datetime(df["time"], unit="s")
 
-                # تبدیل هر ردیف به dict استاندارد
-                raw_data = [
+                rows = [
                     {
-                        "time": row["time"],
-                        "open": row["open"],
-                        "high": row["high"],
-                        "low": row["low"],
-                        "close": row["close"],
-                        "tick_volume": row["tick_volume"],
-                        "spread": row["spread"],
-                        "real_volume": row["real_volume"],
+                        "time": r["time"],
+                        "open": r["open"],
+                        "high": r["high"],
+                        "low": r["low"],
+                        "close": r["close"],
+                        "tick_volume": r["tick_volume"],
+                        "spread": r["spread"],
+                        "real_volume": r["real_volume"],
                     }
-                    for _, row in df.iterrows()
+                    for _, r in df.iterrows()
                 ]
 
-            else:  # data_type == "ticks"
-                if method == "from":               # از یک تاریخ مشخص با count
-                    if not date_from:
-                        print("fetch_data(ticks/from) requires 'date_from'.")  # راهنما
+            else:  # ticks
+                if method == "from":
+                    if not dfrom:
+                        self.log.error("fetch_data(ticks/from) requires 'date_from'.")
                         return None
-                    df_arr = mt5.copy_ticks_from(symbol, date_from, count, flags)  # فراخوانی
-                elif method == "from_pos":         # از یک ایندکس شروع با count (ticks اپی رسمی ندارد؛ نگه‌داشتیم برای سازگاری)
-                    print("ticks/from_pos is not supported by MT5. Using ticks/from with 'date_from' now.")  # اطلاع
-                    if not date_from:
-                        print("fetch_data(ticks/from_pos) fallback requires 'date_from'.")  # راهنما
+                    arr = mt5.copy_ticks_from(target, dfrom, count, flags)
+                elif method == "from_pos":
+                    # MT5 تابع from_pos برای ticks ندارد؛ fallback روی from
+                    if not dfrom:
+                        self.log.error("fetch_data(ticks/from_pos) fallback requires 'date_from'.")
                         return None
-                    df_arr = mt5.copy_ticks_from(symbol, date_from, count, flags)         # fallback
-                else:                               # "range" → با بازه زمانی
-                    if not date_from or not date_to:
-                        print("fetch_data(ticks/range) requires 'date_from' and 'date_to'.")  # راهنما
+                    arr = mt5.copy_ticks_from(target, dfrom, count, flags)
+                else:  # range
+                    if not (dfrom and dto):
+                        self.log.error("fetch_data(ticks/range) requires 'date_from' and 'date_to'.")
                         return None
-                    df_arr = mt5.copy_ticks_range(symbol, date_from, date_to, flags)          # فراخوانی
+                    arr = mt5.copy_ticks_range(target, dfrom, dto, flags)
 
-                if df_arr is None:                 # اگر داده‌ای نیامد
-                    print(f"Failed to copy ticks. err={mt5.last_error()}")  # خطا
+                if arr is None:
+                    self.log.error("copy_ticks_* failed. err=%s", mt5.last_error())
                     return None
 
-                # ساخت DataFrame ticks با ستون‌های متعارف
-                df = pd.DataFrame(df_arr)
-                if df.shape[0] > 0:
-                    # MT5 برای ticks ستون های: time, bid, ask, last, flags, volume, time_msc دارد
-                    df["time"] = pd.to_datetime(df["time"], unit="s")       # تبدیل time
-                    # سایر ستون‌ها را دست‌نخورده می‌گذاریم
+                df = pd.DataFrame(arr)
+                if df.shape[0] > 0 and "time" in df.columns:
+                    df["time"] = pd.to_datetime(df["time"], unit="s")
 
-                # تبدیل به لیست dict
-                raw_data = [
+                rows = [
                     {
-                        "time": row.get("time"),
-                        "bid": float(row.get("bid", 0.0)),
-                        "ask": float(row.get("ask", 0.0)),
-                        "last": float(row.get("last", 0.0)),
-                        "volume": float(row.get("volume", 0.0)) if "volume" in row else 0.0,
-                        "time_msc": int(row.get("time_msc", 0)) if "time_msc" in row else 0,
-                        "flags": int(row.get("flags", 0)) if "flags" in row else 0,
+                        "time": r.get("time"),
+                        "bid": float(r.get("bid", 0.0)),
+                        "ask": float(r.get("ask", 0.0)),
+                        "last": float(r.get("last", 0.0)),
+                        "volume": float(r.get("volume", 0.0)) if "volume" in r else 0.0,
+                        "time_msc": int(r.get("time_msc", 0)) if "time_msc" in r else 0,
+                        "flags": int(r.get("flags", 0)) if "flags" in r else 0,
                     }
-                    for _, row in df.iterrows()
+                    for _, r in df.iterrows()
                 ]
 
-            # نمایش پیش‌نمایش DataFrame برای دیباگ
+            # پیش‌نمایش برای دیباگ
             self._df_preview(df, name=f"{data_type}/{method}")
 
-            # خروجی نهایی
+            # خروجی نهایی (frame برای مصرف داخلی/لاگ؛ بیرون اگر لازم بود سریال‌سازی امن انجام دهید)
             return {
-                "symbol": symbol,
+                "symbol": target,
                 "type": data_type,
                 "method": method,
-                "rows": len(raw_data),
-                "raw": raw_data,
-                "frame": df,  # DataFrame برای تحلیل داخلی؛ در main.py برای لاگ خلاصه می‌شود
+                "rows": len(rows),
+                "raw": rows,
+                "frame": df,
             }
 
         except Exception as e:
-            print(f"Exception in fetch_data: {e}")  # چاپ خطای غیرمنتظره
+            self.log.exception("Exception in fetch_data: %s", e)
             return None
 
     # -----------------------------------------
@@ -421,142 +532,145 @@ class Mt5_Manager:
     # -----------------------------------------
     def trade_manager(
         self,
-        action: str,                            # اکشن: total/get/calc_margin/calc_profit/check/send
-        symbol: Optional[str] = None,           # نماد (برای get/calc*/check/send)
-        order_type: Optional[int] = None,       # نوع سفارش (mt5.ORDER_TYPE_*)
+        action: str,                            # "total" | "get" | "calc_margin" | "calc_profit" | "check" | "send"
+        symbol: Optional[str] = None,           # نماد
+        order_type: Optional[int] = None,       # mt5.ORDER_TYPE_*
         volume: Optional[float] = None,         # حجم
-        price: Optional[float] = None,          # قیمت (در مارکت لازم نیست و اتوماتیک ست می‌شود)
-        price_close: Optional[float] = None,    # قیمت بستن برای calc_profit
-        request: Optional[Dict[str, Any]] = None,  # دیکشنری کامل درخواست برای check/send
+        price: Optional[float] = None,          # قیمت
+        price_close: Optional[float] = None,    # برای calc_profit
+        request: Optional[Dict[str, Any]] = None,  # درخواست کامل برای check/send
     ) -> Optional[Any]:
-        """عملیات مدیریتی معاملات شامل total/get/calc_margin/calc_profit/check/send."""
-
-        action = (action or "").lower()         # یکسان‌سازی اکشن
-
-        # اتصال باید برقرار باشد
+        """
+        ✅ عملیات معاملات شامل:
+        - total/get
+        - calc_margin / calc_profit
+        - check / send
+        نکته: symbol خالی باشد → از کانفیگ انتخاب می‌شود.
+        """
+        action = (action or "").lower().strip()
         if not self._ensure_initialized():
             return None
 
-        # اکشن: تعداد سفارش‌های در صف
+        # ---- total ----
         if action == "total":
-            total = mt5.orders_total()          # تعداد سفارش‌ها
-            print(f"Total open orders: {total}")  # چاپ وضعیت
+            total = mt5.orders_total()
+            self.log.debug("orders_total=%s", total)
             return total
 
-        # اکشن: دریافت سفارش‌ها (فیلتر ساده با symbol)
+        # ---- get ----
         if action == "get":
             if symbol:
-                orders = mt5.orders_get(symbol=symbol)  # با فیلتر نماد
+                orders = mt5.orders_get(symbol=symbol)
             else:
-                orders = mt5.orders_get()               # همه سفارش‌ها
+                orders = mt5.orders_get()
             if orders is None:
-                print(f"Failed to get orders. err={mt5.last_error()}")  # خطا
-                return {"raw_orders": None, "orders_frame": pd.DataFrame()}  # خروجی امن
-            # تبدیل به DataFrame و dict
+                self.log.error("orders_get failed. err=%s", mt5.last_error())
+                return {"raw_orders": None, "orders_frame": pd.DataFrame()}
             frame = pd.DataFrame([o._asdict() for o in orders]) if orders else pd.DataFrame()
-            print(f"Found {len(frame)} orders.")       # چاپ تعداد
             return {"raw_orders": [o._asdict() for o in (orders or [])], "orders_frame": frame}
 
-        # اکشن: محاسبه مارجین
+        # ---- calc_margin ----
         if action == "calc_margin":
             if not (order_type is not None and symbol and volume is not None and price is not None):
-                print("calc_margin requires 'order_type', 'symbol', 'volume', 'price'.")  # راهنما
+                self.log.error("calc_margin requires 'order_type','symbol','volume','price'.")
                 return None
-            margin = mt5.order_calc_margin(order_type, symbol, volume, price)  # فراخوانی API
-            print(f"Calculated margin: {margin}")        # چاپ نتیجه
+            margin = mt5.order_calc_margin(order_type, symbol, volume, price)
+            self.log.debug("calc_margin=%s", margin)
             return margin
 
-        # اکشن: محاسبه سود/زیان
+        # ---- calc_profit ----
         if action == "calc_profit":
             if not (order_type is not None and symbol and volume is not None and price is not None and price_close is not None):
-                print("calc_profit requires 'order_type', 'symbol', 'volume', 'price', 'price_close'.")  # راهنما
+                self.log.error("calc_profit requires 'order_type','symbol','volume','price','price_close'.")
                 return None
-            profit = mt5.order_calc_profit(order_type, symbol, volume, price, price_close)  # API
-            print(f"Calculated profit: {profit}")        # چاپ
+            profit = mt5.order_calc_profit(order_type, symbol, volume, price, price_close)
+            self.log.debug("calc_profit=%s", profit)
             return profit
 
-        # تابع کمکی برای تکمیل فیلدهای request قبل از check/send
+        # ---- check / send ----
         def _prepare_request(req: Dict[str, Any]) -> Dict[str, Any]:
-            """تکمیل request: قیمت مارکت، پر کردن فیلدهای ضروری و سازگارسازی Filling/Time."""
-            req = dict(req or {})                        # کپی امن
-            sy = req.get("symbol") or symbol             # نماد از request یا آرگومان تابع
+            """
+            ✅ تکمیل request قبل از check/send:
+            - اگر action=TRADE_ACTION_DEAL و price خالی است، قیمت مارکت را بر اساس BUY/SELL ست می‌کنیم.
+            - deviation/type_filling/type_time پیش‌فرض می‌گذاریم.
+            - نماد را sanity-check می‌کنیم.
+            """
+            out = dict(req or {})
+            sy = out.get("symbol") or symbol or self._default_symbol()
             if not sy:
-                raise ValueError("request requires 'symbol'.")  # باید نماد داشته باشیم
+                raise ValueError("request requires 'symbol'.")
 
-            # اطمینان از آماده بودن نماد
             if not self._symbol_sanity(sy):
-                raise ValueError(f"Symbol '{sy}' is not ready/visible.")
+                raise ValueError(f"Symbol '{sy}' not ready/visible.")
+            out["symbol"] = sy
 
-            # گرفتن تیک برای قیمت‌های مارکت
-            tick = mt5.symbol_info_tick(sy)              # آخرین تیک
+            tick = mt5.symbol_info_tick(sy)
             if tick is None:
-                raise RuntimeError(f"Cannot get tick for {sy}. err={mt5.last_error()}")  # خطا
+                raise RuntimeError(f"Cannot get tick for {sy}. err={mt5.last_error()}")
 
-            # نوع سفارش (BUY/SELL) برای تصمیم bid/ask
-            otype = req.get("type", order_type)          # نوع سفارش از request یا آرگومان
-            # اگر قیمت خالی باشد و سفارش از نوع مارکت باشد → به طور خودکار تنظیم کن
-            # TRADE_ACTION_DEAL یعنی مارکت؛ TRADE_ACTION_PENDING یعنی اردر معلق
-            if req.get("action") == mt5.TRADE_ACTION_DEAL:
-                # اگر قیمت صفر/خالی است → ست کن
-                if not req.get("price"):
-                    if otype == mt5.ORDER_TYPE_BUY:      # برای BUY از ask استفاده کن
-                        req["price"] = float(tick.ask)
-                    elif otype == mt5.ORDER_TYPE_SELL:   # برای SELL از bid استفاده کن
-                        req["price"] = float(tick.bid)
+            otype = out.get("type", order_type)
+
+            # اگر مارکت اکشن است و قیمت نداریم → بر اساس BUY/SELL ست کن
+            if out.get("action") == mt5.TRADE_ACTION_DEAL:
+                if not out.get("price"):
+                    if otype == mt5.ORDER_TYPE_BUY:
+                        out["price"] = float(tick.ask)
+                    elif otype == mt5.ORDER_TYPE_SELL:
+                        out["price"] = float(tick.bid)
                     else:
-                        # اگر نوع نامشخص بود، پیش‌فرض ask را می‌گذاریم
-                        req["price"] = float(tick.ask)
-                    print(f"Price for Market Execution set to {req['price']}")  # پیام مشابه لاگ شما
+                        out["price"] = float(tick.ask)
+                    self.log.debug("Price set to market (%s)", out["price"])
 
-            # deviation پیش‌فرض
-            req.setdefault("deviation", 10)              # انحراف مجاز
-            # type_filling پیش‌فرض
-            req.setdefault("type_filling", mt5.ORDER_FILLING_IOC)   # حالت IOC
-            # type_time پیش‌فرض
-            req.setdefault("type_time", mt5.ORDER_TIME_GTC)         # تا لغو (Good-Till-Cancel)
+            # پیش‌فرض‌ها
+            out.setdefault("deviation", 10)
+            out.setdefault("type_filling", mt5.ORDER_FILLING_IOC)
+            out.setdefault("type_time", mt5.ORDER_TIME_GTC)
+            return out
 
-            # در صورت نیاز می‌توانید با symbol_info.filling_mode سازگار کنید (بروکرها متفاوت‌اند)
-            # توصیه: اگر order_check خطای Filling داد، این فیلد را تغییر دهید.
-
-            return req
-
-        # اکشن: check (اعتبارسنجی درخواست قبل از ارسال)
         if action == "check":
             if not isinstance(request, dict):
-                print("check requires 'request' dict.")  # راهنما
+                self.log.error("check requires 'request' dict.")
                 return None
-            req = _prepare_request(request)              # تکمیل request
-            result = mt5.order_check(req)                # فراخوانی API
-            if result is None:
-                print(f"order_check failed. err={mt5.last_error()}")  # خطا
+            try:
+                req = _prepare_request(request)
+            except Exception as e:
+                self.log.error("prepare_request failed: %s", e)
                 return None
-            # ساخت پاسخ خوانا
-            account = mt5.account_info()                 # اطلاعات حساب لحظه‌ای
+
+            res = mt5.order_check(req)
+            if res is None:
+                self.log.error("order_check failed. err=%s", mt5.last_error())
+                return None
+
+            acc = mt5.account_info()
             return {
-                "retcode": int(getattr(result, "retcode", 0)),
-                "balance": float(getattr(account, "balance", 0.0)) if account else None,
-                "equity": float(getattr(account, "equity", 0.0)) if account else None,
-                "profit": float(getattr(account, "profit", 0.0)) if account else None,
-                "margin": float(getattr(result, "margin", 0.0)),
-                "margin_free": float(getattr(result, "margin_free", 0.0)),
-                "margin_level": float(getattr(result, "margin_level", 0.0)) if getattr(result, "margin", 0.0) else None,
-                "comment": getattr(result, "comment", ""),
+                "retcode": int(getattr(res, "retcode", 0)),
+                "balance": float(getattr(acc, "balance", 0.0)) if acc else None,
+                "equity": float(getattr(acc, "equity", 0.0)) if acc else None,
+                "profit": float(getattr(acc, "profit", 0.0)) if acc else None,
+                "margin": float(getattr(res, "margin", 0.0)),
+                "margin_free": float(getattr(res, "margin_free", 0.0)),
+                "margin_level": float(getattr(res, "margin_level", 0.0)) if getattr(res, "margin", 0.0) else None,
+                "comment": getattr(res, "comment", ""),
                 "request": req,
             }
 
-        # اکشن: send (ارسال سفارش)
         if action == "send":
             if not isinstance(request, dict):
-                print("send requires 'request' dict.")  # راهنما
+                self.log.error("send requires 'request' dict.")
                 return None
-            req = _prepare_request(request)             # تکمیل request
 
-            # تلاش شماره 1: ارسال مستقیم
-            print(f"Attempting to send order for {req.get('symbol')}...")  # لاگ اقدام
-            res = mt5.order_send(req)                   # ارسال سفارش
+            try:
+                req = _prepare_request(request)
+            except Exception as e:
+                self.log.error("prepare_request failed: %s", e)
+                return None
+
+            self.log.info("order_send attempt #1 for %s", req.get("symbol"))
+            res = mt5.order_send(req)
             if res and getattr(res, "retcode", 0) == mt5.TRADE_RETCODE_DONE:
-                # اگر در همان تلاش اول Done شد
-                print(f"Order sent successfully on first attempt! Deal: {getattr(res,'deal',0)}, Order: {getattr(res,'order',0)}")
+                self.log.info("order_send DONE on first attempt. deal=%s order=%s",
+                              getattr(res, "deal", 0), getattr(res, "order", 0))
                 return {
                     "retcode": int(getattr(res, "retcode", 0)),
                     "deal": int(getattr(res, "deal", 0)),
@@ -571,12 +685,12 @@ class Mt5_Manager:
                     "request": req,
                 }
 
-            # اگر ارسال اول موفق نبود → کمی صبر و یک تلاش دیگر
-            print(f"First order_send attempt not 'DONE'. retcode={getattr(res,'retcode',None)} - retrying...")  # اطلاع
-            time.sleep(0.5)                              # تاخیر کوتاه
-            res2 = mt5.order_send(req)                   # تلاش دوم
+            self.log.warning("First attempt not DONE (retcode=%s). Retrying...", getattr(res, "retcode", None))
+            time.sleep(0.5)
+            res2 = mt5.order_send(req)
             if res2 and getattr(res2, "retcode", 0) == mt5.TRADE_RETCODE_DONE:
-                print(f"Order sent successfully on second attempt! Deal: {getattr(res2,'deal',0)}, Order: {getattr(res2,'order',0)}")
+                self.log.info("order_send DONE on second attempt. deal=%s order=%s",
+                              getattr(res2, "deal", 0), getattr(res2, "order", 0))
                 return {
                     "retcode": int(getattr(res2, "retcode", 0)),
                     "deal": int(getattr(res2, "deal", 0)),
@@ -591,17 +705,15 @@ class Mt5_Manager:
                     "request": req,
                 }
 
-            # اگر هنوز Done نشد، نتیجه آخرین تلاش را برگردان
-            print(f"Order send failed or not done. retcode={getattr(res2,'retcode',None)}, err={mt5.last_error()}")
-            # نکته: در کد شما لاجیک بررسی با magic/position هم بود؛ می‌توان اضافه کرد در صورت نیاز (وضعیت محیطی متفاوته)
+            self.log.error("order_send failed or not DONE. retcode=%s err=%s",
+                           getattr(res2, "retcode", None) if res2 else None, mt5.last_error())
             return {
                 "retcode": int(getattr(res2, "retcode", 0) if res2 else -1),
                 "comment": getattr(res2, "comment", "") if res2 else "order_send returned None",
                 "request": req,
             }
 
-        # اگر اکشن ناشناخته بود
-        print(f"Invalid action for trade_manager: {action}")  # اطلاع
+        self.log.error("Invalid action for trade_manager: %s", action)
         return None
 
     # -----------------------------------------------------
@@ -609,103 +721,93 @@ class Mt5_Manager:
     # -----------------------------------------------------
     def manage_positions_history(
         self,
-        action: str,                                      # اکشن های مجاز: positions_total/positions_get/history_orders_*/history_deals_*
-        symbol: Optional[str] = None,                     # فیلتر اختیار‌ی نماد
-        ticket: Optional[int] = None,                     # فیلتر تیکت مشخص
-        group: Optional[str] = None,                      # فیلتر گروه/نماد برای history_*_get (در orders_get به صورت پایتونی هم فیلتر می‌شود)
-        date_from: Optional[datetime.datetime] = None,    # شروع بازه تاریخی
-        date_to: Optional[datetime.datetime] = None,      # پایان بازه تاریخی
-        position_id: Optional[int] = None                 # فیلتر position_id در history_get
+        action: str,                                      # "positions_total" | "positions_get" | "history_orders_total" | "history_orders_get" | "history_deals_total" | "history_deals_get"
+        symbol: Optional[str] = None,                     # فیلتر نماد
+        ticket: Optional[int] = None,                     # فیلتر تیکت
+        group: Optional[str] = None,                      # فیلتر group برای history_*_get
+        date_from: Optional[Union[str, dt.datetime]] = None,  # شروع بازه
+        date_to: Optional[Union[str, dt.datetime]] = None,    # پایان بازه
+        position_id: Optional[int] = None                 # فیلتر position_id
     ) -> Optional[Union[int, List[Dict[str, Any]], Dict[str, Any]]]:
-        """مدیریت پوزیشن‌های باز و تاریخچه سفارش‌ها/دیل‌ها."""
-
-        action = (action or "").lower()                  # یکسان‌سازی اکشن
-
-        # اتصال باید برقرار باشد
+        """
+        ✅ مدیریت پوزیشن‌های باز و تاریخچه سفارش‌ها/دیل‌ها با پشتیبانی timezone از کانفیگ.
+        """
+        action = (action or "").lower().strip()
         if not self._ensure_initialized():
             return None
 
-        # ---- بخش پوزیشن‌های باز ----
-        if action == "positions_total":                   # تعداد پوزیشن‌های باز
-            total = mt5.positions_total()                 # فراخوانی API
-            print(f"Total open positions: {total}")       # چاپ
-            return total                                  # خروجی
+        # ---- پوزیشن‌های باز ----
+        if action == "positions_total":
+            total = mt5.positions_total()
+            self.log.debug("positions_total=%s", total)
+            return total
 
-        if action == "positions_get":                     # لیست پوزیشن‌ها با فیلتر
-            if ticket is not None:                        # اگر تیکت مشخص داده‌اند
-                pos = mt5.positions_get(ticket=ticket)    # گرفتن همان پوزیشن
-            elif symbol:                                  # در غیر اینصورت با نماد فیلتر کن
+        if action == "positions_get":
+            if ticket is not None:
+                pos = mt5.positions_get(ticket=ticket)
+            elif symbol:
                 pos = mt5.positions_get(symbol=symbol)
             else:
-                pos = mt5.positions_get()                 # همه پوزیشن‌ها
+                pos = mt5.positions_get()
 
-            if pos is None:                               # اگر None شد
-                print(f"Failed to get positions. err={mt5.last_error()}")  # خطا
+            if pos is None:
+                self.log.error("positions_get failed. err=%s", mt5.last_error())
                 return None
+            return [_safe_asdict(p) for p in pos]
 
-            print(f"Found {len(pos)} open positions.")    # چاپ تعداد
-            return [p._asdict() for p in pos]             # تبدیل به dict
+        # ---- تاریخچه orders/deals ----
+        if action in {"history_orders_total", "history_orders_get", "history_deals_total", "history_deals_get"}:
+            tz = self._tz()
+            dfrom = _parse_iso_dt(date_from, tz) if date_from is not None else None
+            dto = _parse_iso_dt(date_to, tz) if date_to is not None else None
 
-        # ---- بخش تاریخچه سفارش‌ها ----
-        if action in {"history_orders_total", "history_orders_get",
-                      "history_deals_total", "history_deals_get"}:
-            # برای total لازم است بازه زمانی داشته باشیم (غیر از حالت position/ticket)
-            if action.endswith("_total") and (date_from is None or date_to is None):
-                print(f"{action} requires 'date_from' and 'date_to'.")       # راهنما
+            if action.endswith("_total") and (dfrom is None or dto is None):
+                self.log.error("%s requires 'date_from' and 'date_to'.", action)
                 return None
-
-            # نرمال‌سازی تاریخ‌ها به UTC
-            if date_from:
-                date_from = date_from if date_from.tzinfo else self.utc_tz.localize(date_from)
-            if date_to:
-                date_to = date_to if date_to.tzinfo else self.utc_tz.localize(date_to)
 
             # ----- ORDERS -----
             if action == "history_orders_total":
-                total = mt5.history_orders_total(date_from, date_to)         # تعداد
-                print(f"Total history orders from {date_from} to {date_to}: {total}")  # چاپ
+                total = mt5.history_orders_total(dfrom, dto)
+                self.log.debug("history_orders_total %s→%s = %s", dfrom, dto, total)
                 return total
 
             if action == "history_orders_get":
-                # اولویت فیلتر بر اساس ticket یا position_id
                 if ticket is not None:
-                    orders = mt5.history_orders_get(ticket=ticket)           # فیلتر با تیکت
+                    orders = mt5.history_orders_get(ticket=ticket)
                 elif position_id is not None:
-                    orders = mt5.history_orders_get(position=position_id)    # فیلتر با پوزیشن
+                    orders = mt5.history_orders_get(position=position_id)
                 else:
-                    # گرفتن همه سفارش‌ها در بازه (سرور فیلتر group را پشتیبانی می‌کند)
-                    orders = mt5.history_orders_get(date_from, date_to, group=group or "*")
+                    orders = mt5.history_orders_get(dfrom, dto, group=group or "*")
 
                 if orders is None:
-                    print(f"Failed to get history orders. err={mt5.last_error()}")  # خطا
+                    self.log.error("history_orders_get failed. err=%s", mt5.last_error())
                     return None
 
-                # اگر کاربر group را نماد گذاشته، و خواستیم در پایتون هم مضاعف فیلتر کنیم:
-                orders_list = [o._asdict() for o in orders]                 # به dict
-                print(f"Found {len(orders_list)} matching history orders.") # چاپ
-                return orders_list
+                out = [_safe_asdict(o) for o in orders]
+                self.log.debug("history_orders_get found=%d", len(out))
+                return out
 
             # ----- DEALS -----
             if action == "history_deals_total":
-                total = mt5.history_deals_total(date_from, date_to)         # تعداد
-                print(f"Total history deals from {date_from} to {date_to}: {total}")  # چاپ
+                total = mt5.history_deals_total(dfrom, dto)
+                self.log.debug("history_deals_total %s→%s = %s", dfrom, dto, total)
                 return total
 
             if action == "history_deals_get":
                 if ticket is not None:
-                    deals = mt5.history_deals_get(ticket=ticket)            # با تیکت
+                    deals = mt5.history_deals_get(ticket=ticket)
                 elif position_id is not None:
-                    deals = mt5.history_deals_get(position=position_id)     # با position_id
+                    deals = mt5.history_deals_get(position=position_id)
                 else:
-                    deals = mt5.history_deals_get(date_from, date_to, group=group or "*")  # بازه + گروه
+                    deals = mt5.history_deals_get(dfrom, dto, group=group or "*")
 
                 if deals is None:
-                    print(f"Failed to get history deals. err={mt5.last_error()}")  # خطا
+                    self.log.error("history_deals_get failed. err=%s", mt5.last_error())
                     return None
-                deals_list = [d._asdict() for d in deals]                  # تبدیل به dict
-                print(f"Found {len(deals_list)} history deals.")           # چاپ
-                return deals_list
 
-        # اگر اکشن ناشناخته بود
-        print(f"Invalid action for manage_positions_history: {action}")     # اطلاع
+                out = [_safe_asdict(d) for d in deals]
+                self.log.debug("history_deals_get found=%d", len(out))
+                return out
+
+        self.log.error("Invalid action for manage_positions_history: %s", action)
         return None
