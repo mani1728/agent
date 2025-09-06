@@ -18,20 +18,20 @@ main.py
 """
 
 from __future__ import annotations  # ✅ سازگاری تایپ‌هینت‌های مدرن (Python 3.8+)
-import sys                          # ✅ خروج امن برنامه در صورت نیاز
-import time                         # ✅ مکث سبک هنگام حلقه انتظار خاموش‌سازی
-import signal                       # ✅ هندل سیگنال‌های سیستم عامل (Ctrl+C/SIGTERM)
-import threading                    # ✅ اگر لازم شد منتظر تردها بمانیم
+import sys  # ✅ خروج امن برنامه در صورت نیاز
+import time  # ✅ مکث سبک هنگام حلقه انتظار خاموش‌سازی
+import signal  # ✅ هندل سیگنال‌های سیستم عامل (Ctrl+C/SIGTERM)
+import threading  # ✅ اگر لازم شد منتظر تردها بمانیم
 from loguru import logger
 # ✅ ماژولِ پیکربندی با هات‌ریلُد
 from config_manager import cfg  # cfg() → شیء HotReloadConfig (سینگلتون)
 
 # ✅ راه‌اندازی لاگ بر اساس قسمت "logging" از config.json
 from config_logging import setup_logging
+import logging
 
 # ✅ شنوندهٔ Kafka (گام بعدی آن را هم با cfg بازنویسی می‌کنیم)
 from kafka_listener import KafkaListener
-
 
 # -----------------------------
 # متغیر/پرچم سراسری برای خاموش‌سازی
@@ -73,7 +73,8 @@ def main() -> None:
 
     # 2) راه‌اندازی لاگ:
     #    setup_logging برای هر بار فراخوانی، آخرین تنظیمات logging را می‌گیرد (level/json/file/rotation)
-    logger = setup_logging(config)
+    setup_logging(config)  # فقط راه‌اندازی؛ خروجی ندارد
+    logger = logging.getLogger("App")
     logger.info("Application bootstrap started (hot-reload config enabled).")
 
     # 3) اگر Kafka غیرفعال باشد، خارج می‌شویم (این رفتار برای محیط‌های تست/دیباگ مفید است)
@@ -97,7 +98,7 @@ def main() -> None:
         sys.exit(1)
 
     # 5) ثبت هندلرهای سیگنال برای خاموش‌سازی تمیز
-    signal.signal(signal.SIGINT, _handle_signal)   # Ctrl+C
+    signal.signal(signal.SIGINT, _handle_signal)  # Ctrl+C
     try:
         signal.signal(signal.SIGTERM, _handle_signal)  # SIGTERM (روی ویندوز ممکن است دردسترس نباشد)
     except Exception:
