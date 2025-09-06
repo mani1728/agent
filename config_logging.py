@@ -58,7 +58,7 @@ class JsonFormatter(logging.Formatter):
 # -------------------------------------------------------------------
 # تابع راه‌اندازی لاگ بر اساس config.json
 # -------------------------------------------------------------------
-def setup_logging() -> None:
+def setup_logging(config) -> None:
     """
     راه‌اندازی کامل لاگ‌گذاری پروژه بر اساس کلیدهای logging.* در config.json.
 
