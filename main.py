@@ -22,7 +22,7 @@ import sys                          # ✅ خروج امن برنامه در صو
 import time                         # ✅ مکث سبک هنگام حلقه انتظار خاموش‌سازی
 import signal                       # ✅ هندل سیگنال‌های سیستم عامل (Ctrl+C/SIGTERM)
 import threading                    # ✅ اگر لازم شد منتظر تردها بمانیم
-
+from loguru import logger
 # ✅ ماژولِ پیکربندی با هات‌ریلُد
 from config_manager import cfg  # cfg() → شیء HotReloadConfig (سینگلتون)
 
