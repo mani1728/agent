@@ -139,8 +139,8 @@ class HotReloadConfig:
         """توقف حلقهٔ ناظر (برای خروج تمیز از برنامه)."""
         self._stop = True                                                         # ✅ ست‌کردن پرچم توقف
 
-    def __call__(self, path: str, default=None):
-        return self.get(path, default)
+    # def __call__(self, path: str, default=None):
+    #     return self.get(path, default)
 
     # ---------------------------------------------------
     # خواندن فایل پیکربندی از دیسک + حذف کامنت‌ها + parse JSON

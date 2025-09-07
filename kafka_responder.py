@@ -82,7 +82,8 @@ class KafkaResponder:
         این متد لیست ["host1:9092","host2:9092"] را به "host1:9092,host2:9092" تبدیل می‌کند.
         """
         return ",".join(servers or [])
-
+    def _get_cfg(self):
+        return self._cfg_provider() if callable(self._cfg_provider) else self._cfg_provider
     # ---------------------------------------------
     #  متد کمکی: خواندن تنظیمات مرتبط با Producer از cfg
     #  و ساخت دیکشنری قابل‌استفاده برای Producer(...)
@@ -98,7 +99,7 @@ class KafkaResponder:
         نکتهٔ هات‌ریلُد:
           این متد در هر بار فراخوانی مقادیر را «زنده» از config.json می‌خواند.
         """
-        c = self._cfg_provider()  # ✅ گرفتن سینگلتون پیکربندی با هات‌ریلُد
+        c = self._get_cfg()  # ✅ گرفتن سینگلتون پیکربندی با هات‌ریلُد
 
         # ---- خواندن ریشهٔ kafka ----
         kafka_enabled = bool(c.get("kafka.enabled", True))  # دیفالت: True
@@ -173,9 +174,12 @@ class KafkaResponder:
             "compression.type",
             "enable.idempotence",
         ]
+        base = tuple((k,conf.get(k)) for k in keys)
+        extra = (("replies_topic", replies_topic), ("resp_max_part_bytes", resp_sz), ("enabled", enabled))
+        return base + extra
         # ساخت tuple منظم
-        sig = tuple((k, conf.get(k)) for k in keys) + ("replies_topic", replies_topic), ("resp_max_part_bytes", resp_sz), ("enabled", enabled)
-        return sig
+        # sig = tuple((k, conf.get(k)) for k in keys) + ("replies_topic", replies_topic), ("resp_max_part_bytes", resp_sz), ("enabled", enabled)
+        # return sig
 
     # ---------------------------------------------
     #  متد کمکی: ساخت یا بازسازی Producer در صورت نیاز
