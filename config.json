@@ -133,7 +133,7 @@
     "server": "",
 
     // مسیر اجرایی ترمینال MT5 (در بعضی سیستم‌ها ضروری است).
-    "path": "",
+    "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
 
     // تایم‌اوت پیش‌فرض عملیات (ثانیه).
     "timeout_sec": 10,
