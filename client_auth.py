@@ -216,13 +216,16 @@ class ClientAuth(object):
             ("encoding", "utf-8"),
         ]
 
+        # ⬇️ تبدیل به bytes
+        headers_bytes = [(k, v.encode("utf-8")) for (k, v) in headers]
+
         # ارسال درخواست ثبت‌نام
         try:
             self._producer.produce(
                 topic=self._conf["register_topic"],
                 key=self.client_tmp_id.encode("utf-8"),
                 value=body_bytes,
-                headers=headers,
+                headers=headers_bytes,
             )
             self._producer.flush(5.0)
             self.log("info", "Registration request sent.",
