@@ -7,132 +7,204 @@ main.py
 وظایف:
 1) بارگذاری پیکربندی هات‌ریلُد از config.json (بدون ENV)
 2) راه‌اندازی لاگ بر اساس بخش "logging" در config.json
-3) بررسی فعال/غیر‌فعال بودن Kafka (kafka.enabled)
-4) ساخت و اجرای KafkaListener با تزریق cfg (برای استفاده مستقیم از کانفیگِ هات‌ریلُد)
-5) خاموش‌سازی تمیز با سیگنال‌ها (Ctrl+C و SIGTERM)
+3) ثبت‌نام کلاینت (Hello) روی تاپیک clients.register و استارت heartbeat
+4) بررسی فعال/غیرفعال بودن Kafka (kafka.enabled)
+5) ساخت و اجرای KafkaListener با تزریق cfg (برای استفاده از کانفیگ هات‌ریلُد)
+6) خاموش‌سازی تمیز با سیگنال‌ها (Ctrl+C و SIGTERM)
 
-پیش‌نیاز:
-- config_manager.py  ← شامل HotReloadConfig و سینگلتون cfg()
-- config_logging.py  ← تابع setup_logging(cfg=...) که از بخش "logging" می‌خواند
-- kafka_listener.py  ← در گام بعدی بازنویسی‌اش می‌کنیم تا مستقیماً از cfg استفاده کند
+پیش‌نیاز ماژول‌ها:
+- config_manager.py  → شامل HotReloadConfig و سینگلتون cfg()
+- config_logging.py  → تابع setup_logging(cfg=...) که از بخش "logging" می‌خواند
+- client_auth.py     → شامل ClientAuth برای ثبت‌نام و heartbeat
+- kafka_listener.py  → شنوندهٔ کافکا که cfg را می‌گیرد و روی cmd.{client_id}.p* گوش می‌دهد
 """
 
-from __future__ import annotations  # ✅ سازگاری تایپ‌هینت‌های مدرن (Python 3.8+)
-import sys  # ✅ خروج امن برنامه در صورت نیاز
-import time  # ✅ مکث سبک هنگام حلقه انتظار خاموش‌سازی
-import signal  # ✅ هندل سیگنال‌های سیستم عامل (Ctrl+C/SIGTERM)
-import threading  # ✅ اگر لازم شد منتظر تردها بمانیم
-from loguru import logger
-# ✅ ماژولِ پیکربندی با هات‌ریلُد
-from config_manager import cfg  # cfg() → شیء HotReloadConfig (سینگلتون)
+from __future__ import annotations  # ✅ باید بلافاصله بعد از داک‌استرینگ بیاید (PEP 236)
 
-# ✅ راه‌اندازی لاگ بر اساس قسمت "logging" از config.json
-from config_logging import setup_logging
-import logging
+# ==== کتابخانه‌های استاندارد پایتون ====
+import sys                  # ✅ برای خروج امن برنامه در صورت خطای بحرانی
+import time                 # ✅ مکث سبک در حلقه‌ی اصلی
+import signal               # ✅ ثبت هندلر سیگنال‌های سیستم‌عامل (Ctrl+C / SIGTERM)
+import threading            # ✅ اجرای لیسنر در ترد جدا و مدیریت رویداد خاموش‌سازی
+import platform             # ✅ ساخت meta برای رجیستر (اطلاعات سیستم)
+import getpass              # ✅ افزودن نام کاربر به meta
+import logging              # ✅ زیرساخت لاگ استاندارد پایتون
 
-# ✅ شنوندهٔ Kafka (گام بعدی آن را هم با cfg بازنویسی می‌کنیم)
-from kafka_listener import KafkaListener
+# ==== ماژول‌های پروژه (هات‌ریلُد کانفیگ، لاگ، رجیستر، لیسنر) ====
+from config_manager import cfg            # ✅ cfg() → شیء HotReloadConfig (سینگلتون با هات‌ریلُد)
+from config_logging import setup_logging  # ✅ راه‌اندازی logging بر اساس config.json
+from client_auth import ClientAuth        # ✅ مدیریت ثبت‌نام/توکن/heartbeat کلاینت
+from kafka_listener import KafkaListener  # ✅ شنونده‌ی دستورات روی cmd.{client_id}.p{0,1,2}
 
 # -----------------------------
-# متغیر/پرچم سراسری برای خاموش‌سازی
+# رویداد سراسری برای خاموش‌سازی تمیز
 # -----------------------------
-_shutdown_event = threading.Event()  # ✅ وقتی True شود، حلقه‌های بلاکینگ باید متوقف شوند
+_shutdown_event = threading.Event()  # ✅ وقتی set شود، حلقه‌ی اصلی برنامه باید متوقف شود
 
 
-def _handle_signal(signum, frame):
+# -----------------------------
+# لاگر سبک برای ClientAuth (bridge به logging استاندارد)
+# -----------------------------
+def _clientauth_logger(level: str, msg: str, **kw) -> None:
     """
-    هندلر سیگنال‌های سیستم عامل:
-    - SIGINT  → Ctrl+C
-    - SIGTERM → خاموش‌سازی سرویس در محیط‌های Production
-    با دریافت سیگنال، پرچم خاموش‌سازی را ست می‌کنیم تا لوپ اصلی تمیز خارج شود.
+    این تابع را به ClientAuth می‌دهیم تا به‌جای print از logging استاندارد استفاده کند.
+    level: "info"|"warning"|"error"|...
+    msg: متن پیام
+    kw: کلیدواژه‌های اضافه برای لاگ
     """
-    logger = None
-    try:
-        import logging
-        logger = logging.getLogger("App")
-    except Exception:
-        pass
+    lvl = getattr(logging, level.upper(), logging.INFO)
+    logging.getLogger("ClientAuth").log(lvl, f"{msg} | {kw}" if kw else msg)
 
-    if logger:
-        logger.info("Shutdown signal received", extra={"signum": signum})
+
+# -----------------------------
+# هندلر سیگنال‌ها برای خاموش‌سازی تمیز
+# -----------------------------
+def _handle_signal(signum, frame) -> None:
+    """
+    با دریافت سیگنال‌های SIGINT (Ctrl+C) یا SIGTERM:
+    - یک پیام لاگ می‌زنیم
+    - رویداد خاموش‌سازی را set می‌کنیم تا حلقه‌ی اصلی خارج شود
+    """
+    logging.getLogger("App").info("Shutdown signal received", extra={"signum": signum})
     _shutdown_event.set()
 
 
+# -----------------------------
+# تابع اصلی برنامه
+# -----------------------------
 def main() -> None:
     """
-    نقطهٔ ورود اصلی برنامه:
-    1) گرفتن شیء پیکربندی (هات‌ریلُد)
-    2) راه‌اندازی لاگ
-    3) بررسی فعال بودن Kafka
-    4) ساخت و اجرای KafkaListener
-    5) حلقهٔ انتظار برای سیگنال خاموش‌سازی (با خروج تمیز)
+    مراحل اصلی اجرای برنامه:
+      - گرفتن cfg (هات‌ریلُد)
+      - راه‌اندازی logging
+      - ثبت‌نام کلاینت و آغاز heartbeat
+      - استارت KafkaListener در ترد جدا
+      - انتظار تا زمان دریافت سیگنال خاموش‌سازی و سپس خروج تمیز
     """
-    # 1) دسترسی به پیکربندی هات‌ریلُد (سینگلتون)
-    #    نکته: cfg() در پس‌زمینه تغییرات فایل را چِک می‌کند و همیشه آخرین مقدارها را برمی‌گرداند.
-    config = cfg()
+    # 1) گرفتن شیء پیکربندی با هات‌ریلُد (از config.json)
+    config = cfg()  # ✅ از این به بعد هر بار config.get(...) صدا بزنیم آخرین مقادیر را می‌خواند
 
-    # 2) راه‌اندازی لاگ:
-    #    setup_logging برای هر بار فراخوانی، آخرین تنظیمات logging را می‌گیرد (level/json/file/rotation)
-    setup_logging(config)  # فقط راه‌اندازی؛ خروجی ندارد
-    logger = logging.getLogger("App")
-    logger.info("Application bootstrap started (hot-reload config enabled).")
+    # 2) راه‌اندازی logging با تنظیمات فایل config.json (level/json/file/rotation/...)
+    setup_logging(config)
+    app_logger = logging.getLogger("App")
+    app_logger.info("Application bootstrap started (hot-reload config enabled).")
 
-    # 3) اگر Kafka غیرفعال باشد، خارج می‌شویم (این رفتار برای محیط‌های تست/دیباگ مفید است)
-    kafka_enabled = bool(config.get("kafka.enabled", True))
-    if not kafka_enabled:
-        logger.warning("Kafka is disabled by config (kafka.enabled=false). Exiting main.")
+    # 3) ثبت‌نام کلاینت روی تاپیک clients.register + استارت heartbeat
+    #    - اگر خطایی رخ دهد، لاگ می‌زنیم ولی برنامه را متوقف نمی‌کنیم
+    #      (می‌توانید بسته به سیاست‌تان این‌جا return یا sys.exit(1) هم بکنید)
+    ca = None  # نگه‌داشتن مرجع تا گاربیج‌کالکت نشود (heartbeat زنده بماند)
+    try:
+        # متادیتای دلخواه که همراه درخواست ثبت‌نام ارسال می‌شود
+        meta = {
+            "os": platform.platform(),          # مثال: 'Windows-10-10.0.19045-SP0'
+            "username": getpass.getuser(),      # مثال: 'Administrator'
+            "python": sys.version.split()[0],   # مثال: '3.13.0'
+            "agent_version": "0.1.0",           # نسخه‌ی ایجنت شما
+            "capabilities": ["mt5", "reports"], # قابلیت‌های این کلاینت
+        }
+        # ساخت ClientAuth با لاگر بریج‌شده
+        ca = ClientAuth(client_meta=meta, logger=_clientauth_logger)
+        # ارسال پیام Hello (ClientRegisterV1) به clients.register و انتظار پاسخ
+        ca.register()
+        # بعد از ca.register() و قبل از ساخت KafkaListener:
+        try:
+            # 1) client_id جدید را در کانفیگِ زنده ست کن
+            config._data.setdefault("kafka", {})["client_id"] = ca.client_id
+
+            # 2) لیست نهایی تاپیک‌های فرمان را با client_id جدید بساز و داخل کانفیگ تزریق کن
+            final_cmd_topics = [
+                f"cmd.{ca.client_id}.p0",
+                f"cmd.{ca.client_id}.p1",
+                f"cmd.{ca.client_id}.p2",
+            ]
+            config._data["kafka"].setdefault("topics", {})
+            config._data["kafka"]["topics"]["commands"] = final_cmd_topics
+            config._data["kafka"]["group_id"] = f"mt5-service.{ca.client_id}"
+
+            logging.getLogger("App").info(
+                "Client topics updated after registration",
+                extra={"client_id": ca.client_id, "topics": final_cmd_topics},
+            )
+        except Exception:
+            logging.getLogger("App").exception("Failed to update topics after registration")
+
+        # نکته: پس از موفقیت، heartbeat به‌صورت خودکار در یک ترد daemon شروع می‌شود.
+    except Exception as e:
+        app_logger.exception("Client registration failed: %s", e)
+        # اگر می‌خواهید بدون رجیستر ادامه ندهید، این خط را uncomment کنید:
+        # return
+
+    # 4) اگر Kafka غیرفعال باشد، خروج (برای حالت‌های تست/دیباگ)
+    if not bool(config.get("kafka.enabled", True)):
+        app_logger.warning("Kafka is disabled by config (kafka.enabled=false). Exiting main.")
+        # تلاش برای توقف heartbeat و تمیزکاری
+        try:
+            if ca:
+                ca.stop()
+        except Exception:
+            pass
         return
 
-    # 4) ساخت KafkaListener:
-    #    ـــ مهم: در بازنویسی kafka_listener.py، سازنده باید شیء cfg را بگیرد
-    #    تا در هر لحظه بتواند آخرین مقدارها را (bootstrap_servers/topics/...) بخواند.
+    # 5) ساخت شنونده‌ی کافکا و سابسکرایب به cmd.{client_id}.p{0,1,2}
     try:
-        listener = KafkaListener(config)  # ✅ ترجیح: KafkaListener(cfg: HotReloadConfig)
+        listener = KafkaListener(config)  # سازنده نسخه‌ی بازنویسی‌شده که HotReloadConfig می‌گیرد
     except TypeError:
-        # اگر نسخهٔ قدیمی KafkaListener هنوز AppSettings می‌خواهد، این خطا می‌خورید.
-        # در گام بعدی kafka_listener.py را بازنویسی می‌کنیم تا با cfg کار کند.
-        logger.error(
+        # اگر هنوز نسخه‌ی قدیمی KafkaListener نصب است که به AppSettings نیاز داشت:
+        app_logger.error(
             "KafkaListener constructor signature mismatch. "
             "Expected KafkaListener(cfg: HotReloadConfig). Please use the rewritten kafka_listener.py."
         )
+        # توقف heartbeat در صورت وجود
+        try:
+            if ca:
+                ca.stop()
+        except Exception:
+            pass
         sys.exit(1)
 
-    # 5) ثبت هندلرهای سیگنال برای خاموش‌سازی تمیز
-    signal.signal(signal.SIGINT, _handle_signal)  # Ctrl+C
+    # 6) ثبت هندلر سیگنال‌ها برای خاموش‌سازی تمیز
+    signal.signal(signal.SIGINT, _handle_signal)   # Ctrl+C
     try:
-        signal.signal(signal.SIGTERM, _handle_signal)  # SIGTERM (روی ویندوز ممکن است دردسترس نباشد)
+        signal.signal(signal.SIGTERM, _handle_signal)  # ممکن است روی ویندوز در دسترس نباشد
     except Exception:
         pass
 
-    # 6) استارت شنونده
+    # 7) استارت KafkaListener در یک ترد daemon تا حلقه‌ی اصلی بلاکه نشود
+    app_logger.info("KafkaListener starting...")
+    t = threading.Thread(target=listener.listen, name="KafkaListener", daemon=True)
+    t.start()
+    app_logger.info("KafkaListener started.")
+
+    # 8) حلقه‌ی سبک انتظار تا زمان دریافت سیگنال خاموش‌سازی
     try:
-        logger.info("KafkaListener starting...")
-        # نکتهٔ قراردادی: فرض می‌کنیم KafkaListener.listen() خودش بلاکینگ است و تا زمان stop ادامه می‌دهد.
-        # اگر نان-بلاکینگ باشد، می‌توانید آن را در یک ترد جداگانه استارت کنید و جایی که لازم است join کنید.
-        t = threading.Thread(target=listener.listen, name="KafkaListener", daemon=True)
-        t.start()
-        logger.info("KafkaListener started.")
-
-        # 7) حلقهٔ سبک انتظار تا وقتی سیگنال خاموش‌سازی برسد
         while not _shutdown_event.is_set():
-            # در این بازه، می‌توانید سلامت سرویس را لاگ کنید یا وضعیت cfg را چک کنید
-            # مثال: logger.debug("heartbeat main loop", extra={"env": config.get("app.env")})
+            # اگر خواستید health-check یا متریک چاپ کنید، این‌جا مناسب است
             time.sleep(0.5)
-
     except Exception as e:
-        logger.exception("Fatal error in main loop: %s", e)
+        app_logger.exception("Fatal error in main loop: %s", e)
     finally:
-        # 8) تلاش برای خاموش‌سازی تمیز
-        logger.info("Shutting down...")
+        # 9) خاموش‌سازی تمیز: توقف listener و heartbeat
+        app_logger.info("Shutting down...")
+
+        # توقف KafkaListener اگر متد stop دارد
         try:
-            # اگر KafkaListener متدی برای توقف دارد، صدا بزنیم (در بازنویسی kafka_listener.py اضافه می‌کنیم)
             if hasattr(listener, "stop"):
                 listener.stop()
         except Exception:
             pass
-        logger.info("Bye.")
+
+        # توقف heartbeat/Producer/Consumer مربوط به ClientAuth
+        try:
+            if ca:
+                ca.stop()
+        except Exception:
+            pass
+
+        app_logger.info("Bye.")
 
 
+# -----------------------------
 # اجرای مستقیم فایل (python main.py)
+# -----------------------------
 if __name__ == "__main__":
     main()

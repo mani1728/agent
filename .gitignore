@@ -7,3 +7,4 @@ __pycache__/*
 /logs
 test_code.py
 /markdown-cheat-sheet.md
+agent_identity.json
