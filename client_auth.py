@@ -245,9 +245,14 @@ class ClientAuth(object):
             if msg.error():
                 raise KafkaException(msg.error())
 
-            hdrs = dict(msg.headers() or [])
+            # هدرها را به str دیکود کن تا با corr_id (str) قابل مقایسه باشند
+            raw_headers = msg.headers() or []
+            hdrs = {k: (v.decode("utf-8") if isinstance(v, (bytes, bytearray)) else v) for k, v in raw_headers}
             # فقط پاسخ‌هایی که corr_id یا client_tmp_id خودمان را دارند قبول می‌کنیم
+            # اگر یکی از این دو کلید بخورد، پیام مال ماست
             if hdrs.get("corr_id") != corr_id and hdrs.get("client_tmp_id") != self.client_tmp_id:
+                # قبل از continue:
+                self.log("debug", "register response seen but header mismatch", hdrs=hdrs)
                 continue
 
             try:

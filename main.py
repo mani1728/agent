@@ -106,6 +106,28 @@ def main() -> None:
         ca = ClientAuth(client_meta=meta, logger=_clientauth_logger)
         # ارسال پیام Hello (ClientRegisterV1) به clients.register و انتظار پاسخ
         ca.register()
+        # بعد از ca.register() و قبل از ساخت KafkaListener:
+        try:
+            # 1) client_id جدید را در کانفیگِ زنده ست کن
+            config._data.setdefault("kafka", {})["client_id"] = ca.client_id
+
+            # 2) لیست نهایی تاپیک‌های فرمان را با client_id جدید بساز و داخل کانفیگ تزریق کن
+            final_cmd_topics = [
+                f"cmd.{ca.client_id}.p0",
+                f"cmd.{ca.client_id}.p1",
+                f"cmd.{ca.client_id}.p2",
+            ]
+            config._data["kafka"].setdefault("topics", {})
+            config._data["kafka"]["topics"]["commands"] = final_cmd_topics
+            config._data["kafka"]["group_id"] = f"mt5-service.{ca.client_id}"
+
+            logging.getLogger("App").info(
+                "Client topics updated after registration",
+                extra={"client_id": ca.client_id, "topics": final_cmd_topics},
+            )
+        except Exception:
+            logging.getLogger("App").exception("Failed to update topics after registration")
+
         # نکته: پس از موفقیت، heartbeat به‌صورت خودکار در یک ترد daemon شروع می‌شود.
     except Exception as e:
         app_logger.exception("Client registration failed: %s", e)
