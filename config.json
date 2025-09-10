@@ -124,13 +124,13 @@
 
   "mt5": {
     // شمارهٔ لاگین حساب MT5 (عدد صحیح).
-    "login": 0,
+    "login": 5039429059,
 
     // گذرواژهٔ حساب MT5.
-    "password": "",
+    "password": "@kGfE6Ym",
 
     // نام/آدرس سرور بروکر در MT5.
-    "server": "",
+    "server": "MetaQuotes-Demo",
 
     // مسیر اجرایی ترمینال MT5 (در بعضی سیستم‌ها ضروری است).
     "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
