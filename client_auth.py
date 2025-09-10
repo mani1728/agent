@@ -262,6 +262,8 @@ class ClientAuth(object):
     # --------------------------------------------------------
     # شروع فرآیند ثبت‌نام
     # --------------------------------------------------------
+    # client_auth.py
+
     def register(self):
         """
         1) ارسال درخواست رجیستر به تاپیک register
@@ -272,113 +274,115 @@ class ClientAuth(object):
         self._refresh_conf_if_needed()
         self.log("info", "Start client registration")
 
-        # شناسه‌ی همبستگی درخواست/پاسخ + زمان/nonce
+        # شناسه‌ی همبستگی + زمان/nonce
         corr_id = str(uuid.uuid4())
         req_ts = _utcnow_iso()
         nonce = _nonce()
 
         # --- بدنه‌ی درخواست: meta + ts/nonce + tmp_id ---
-        # ⚠️ این‌جا client_id «پایدار» را داخل meta هم می‌فرستیم
         meta = dict(self.client_meta or {})
-        meta.setdefault("client_id", self.client_id)
+        meta.setdefault("client_id", self.client_id)  # client_id پایدار
         meta.setdefault("hostname", platform.node() or "")
-        # اگر بخواهید، می‌توانید مقادیر زیر را هم اضافه/ارسال کنید:
-        # meta["machine_guid"] = _read_machine_guid_windows() or None
 
         body = {
             "schema": "ClientRegisterV1",
             "client_tmp_id": self.client_tmp_id,
-            "meta": meta,           # ← حتماً meta با client_id پایدار
+            "meta": meta,
             "ts": req_ts,
             "nonce": nonce,
         }
         body_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
 
-        # --- هدرهای درخواست: حتماً client_id پایدار را هم در هدر بفرست ---
+        # --- هدرهای درخواست ---
         headers = [
             ("schema", "ClientRegisterV1"),
             ("client_tmp_id", self.client_tmp_id),
-            ("client_id", self.client_id),         # ← برای Identity keys: header.client_id
+            ("client_id", self.client_id),
             ("corr_id", corr_id),
             ("content_type", "application/json"),
             ("encoding", "utf-8"),
         ]
-        # Kafka باید bytes بگیرد:
         headers_bytes = [(k, v.encode("utf-8")) for (k, v) in headers]
 
         # --- ارسال درخواست رجیستر ---
         try:
             self._producer.produce(
                 topic=self._conf["register_topic"],
-                key=self.client_tmp_id.encode("utf-8"),  # key پیام = client_tmp_id (UUID)
+                key=self.client_tmp_id.encode("utf-8"),
                 value=body_bytes,
                 headers=headers_bytes,
             )
-            self._producer.flush(5.0)  # ارسال فوری (در رجیستر بهتر است بلاکینگ باشد)
+            self._producer.flush(5.0)
             self.log("info", "Registration request sent.",
                      topic=self._conf["register_topic"], corr_id=corr_id)
         except Exception as e:
             raise RuntimeError(f"Registration submission failed: {e}")
 
         # --- دریافت پاسخ رجیستر ---
-        self._register_consumer.subscribe([self._conf["register_responses_topic"]])
-        deadline = time.time() + self._conf["register_timeout_sec"]
-
         response = None
-        while time.time() < deadline:
-            msg = self._register_consumer.poll(1.0)
-            if msg is None:
-                continue
-            if msg.error():
-                raise KafkaException(msg.error())
+        deadline = time.time() + self._conf["register_timeout_sec"]
+        self._register_consumer.subscribe([self._conf["register_responses_topic"]])
 
-            # دیکود هدرهای دریافتی به str
-            raw_headers = msg.headers() or []
-            hdrs = {k: (v.decode("utf-8") if isinstance(v, (bytes, bytearray)) else v) for k, v in raw_headers}
+        try:
+            while time.time() < deadline:
+                msg = self._register_consumer.poll(1.0)
+                if msg is None:
+                    continue
+                if msg.error():
+                    raise KafkaException(msg.error())
 
-            # باید corr_id یا client_tmp_id خودمان را داشته باشد تا پاسخِ ما باشد
-            if hdrs.get("corr_id") != corr_id and hdrs.get("client_tmp_id") != self.client_tmp_id:
-                self.log("debug", "register response seen but header mismatch", hdrs=hdrs)
-                continue
+                raw_headers = msg.headers() or []
+                hdrs = {k: (v.decode("utf-8") if isinstance(v, (bytes, bytearray)) else v)
+                        for k, v in raw_headers}
 
-            # دیکود payload
+                # باید پاسخ خودمان باشد (corr_id یا client_tmp_id یکی بخورد)
+                if hdrs.get("corr_id") != corr_id and hdrs.get("client_tmp_id") != self.client_tmp_id:
+                    self.log("debug", "register response seen but header mismatch", hdrs=hdrs)
+                    continue
+
+                try:
+                    payload = json.loads(msg.value().decode("utf-8"))
+                except Exception:
+                    continue
+
+                response = payload
+                break
+
+            if response is None:
+                raise TimeoutError("Registration response not received within the specified time.")
+
+            # --- پردازش پاسخ ---
+            server_client_id = response.get("client_id") or self.client_id
+            self.client_id = server_client_id
+            self.auth_token = response.get("auth_token")
+            exp_iso = response.get("expires_at")
+            self.token_expires_at = (
+                datetime.fromisoformat(exp_iso)
+                if exp_iso else (datetime.utcnow().replace(tzinfo=timezone.utc) + timedelta(hours=24))
+            )
+
+            if not self.client_id or not self.auth_token:
+                raise ValueError("The registration response is incomplete (client_id or auth_token not present)")
+
+            # ذخیره هویت برای بوت‌های بعدی
+            _save_cached_identity(
+                client_id=self.client_id,
+                auth_token=self.auth_token,
+                expires_at=self.token_expires_at.isoformat()
+            )
+
+            self.log("info", "Successful registration",
+                     client_id=self.client_id, expires_at=self.token_expires_at.isoformat())
+
+            # استارت heartbeat
+            self._start_heartbeat()
+
+        finally:
+            # ←←← این همان بخش درخواستیِ شماست
             try:
-                payload = json.loads(msg.value().decode("utf-8"))
+                self._register_consumer.close()
             except Exception:
-                continue
-
-            response = payload
-            break
-
-        if response is None:
-            raise TimeoutError("Registration response not received within the specified time.")
-
-        # --- پردازش پاسخ رجیستر ---
-        # انتظار می‌رود: { client_id, auth_token, expires_at (ISO8601), ... }
-        server_client_id = response.get("client_id") or self.client_id
-        self.client_id = server_client_id
-        self.auth_token = response.get("auth_token")
-        exp_iso = response.get("expires_at")
-        self.token_expires_at = (
-            datetime.fromisoformat(exp_iso)
-            if exp_iso else (datetime.utcnow().replace(tzinfo=timezone.utc) + timedelta(hours=24))
-        )
-
-        if not self.client_id or not self.auth_token:
-            raise ValueError("The registration response is incomplete (client_id or auth_token not present)")
-
-        # ⭐️ ذخیره‌ی هویت برای بوت‌های بعدی (پایداری client_id)
-        _save_cached_identity(
-            client_id=self.client_id,
-            auth_token=self.auth_token,
-            expires_at=self.token_expires_at.isoformat()
-        )
-
-        self.log("info", "Successful registration",
-                 client_id=self.client_id, expires_at=self.token_expires_at.isoformat())
-
-        # --- استارت heartbeat پس از رجیستر موفق ---
-        self._start_heartbeat()
+                pass
 
     # --------------------------------------------------------
     # نام تاپیک Inbox اختصاصی کلاینت
