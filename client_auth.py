@@ -266,24 +266,41 @@ class ClientAuth(object):
 
     def register(self):
         """
-        1) ارسال درخواست رجیستر به تاپیک register
-        2) گوش‌دادن پاسخ در تاپیک register_responses
-        3) ذخیره‌ی client_id/auth_token/expiry
-        4) استارت ترد heartbeat
+        ثبت‌نام کلاینت:
+          1) اگر هویت کش‌شده معتبر است → رجیستر نکن و heartbeat را روشن کن.
+          2) در غیر این صورت: ارسال درخواست به register و دریافت پاسخ از register_responses.
+          3) ذخیره client_id/auth_token/expiry و استارت heartbeat.
         """
+        # --- 0) اگر کش معتبر داریم، رجیستر نکنیم ---
+        try:
+            if self.auth_token and self.token_expires_at:
+                now = datetime.utcnow().replace(tzinfo=timezone.utc)
+                if self.token_expires_at > now:
+                    self.log(
+                        "info",
+                        "Identity already valid, skipping registration.",
+                        client_id=self.client_id,
+                        expires_at=self.token_expires_at.isoformat(),
+                    )
+                    # مطمئن شو heartbeat فعال است
+                    self._start_heartbeat()
+                    return
+        except Exception:
+            # هر خطایی در بررسی کش → رجیستر معمولی
+            pass
+
+        # --- 1) آماده‌سازی ---
         self._refresh_conf_if_needed()
         self.log("info", "Start client registration")
 
-        # شناسه‌ی همبستگی + زمان/nonce
         corr_id = str(uuid.uuid4())
         req_ts = _utcnow_iso()
         nonce = _nonce()
 
-        # --- بدنه‌ی درخواست: meta + ts/nonce + tmp_id ---
+        # بدنه‌ی درخواست
         meta = dict(self.client_meta or {})
-        meta.setdefault("client_id", self.client_id)  # client_id پایدار
+        meta.setdefault("client_id", self.client_id)  # client_id پایدار (پیشنهادی/کش)
         meta.setdefault("hostname", platform.node() or "")
-
         body = {
             "schema": "ClientRegisterV1",
             "client_tmp_id": self.client_tmp_id,
@@ -293,7 +310,7 @@ class ClientAuth(object):
         }
         body_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
 
-        # --- هدرهای درخواست ---
+        # هدرهای درخواست
         headers = [
             ("schema", "ClientRegisterV1"),
             ("client_tmp_id", self.client_tmp_id),
@@ -304,26 +321,41 @@ class ClientAuth(object):
         ]
         headers_bytes = [(k, v.encode("utf-8")) for (k, v) in headers]
 
-        # --- ارسال درخواست رجیستر ---
-        try:
-            self._producer.produce(
-                topic=self._conf["register_topic"],
-                key=self.client_tmp_id.encode("utf-8"),
-                value=body_bytes,
-                headers=headers_bytes,
-            )
-            self._producer.flush(5.0)
-            self.log("info", "Registration request sent.",
-                     topic=self._conf["register_topic"], corr_id=corr_id)
-        except Exception as e:
-            raise RuntimeError(f"Registration submission failed: {e}")
-
-        # --- دریافت پاسخ رجیستر ---
+        # --- 2) اول subscribe + warm-up برای جلوگیری از race ، بعد publish ---
         response = None
         deadline = time.time() + self._conf["register_timeout_sec"]
-        self._register_consumer.subscribe([self._conf["register_responses_topic"]])
 
         try:
+            # subscribe به تاپیک پاسخ
+            try:
+                self._register_consumer.subscribe([self._conf["register_responses_topic"]])
+                # warm-up کوتاه تا assignment کامل شود (جلوگیری از miss پاسخ‌های بسیار سریع)
+                t0 = time.time()
+                while time.time() - t0 < 1.0:
+                    _ = self._register_consumer.poll(0.05)
+            except Exception:
+                # اگر warm-up شکست خورد، ادامه می‌دهیم
+                pass
+
+            # حالا درخواست رجیستریشن را بفرست
+            try:
+                self._producer.produce(
+                    topic=self._conf["register_topic"],
+                    key=self.client_tmp_id.encode("utf-8"),
+                    value=body_bytes,
+                    headers=headers_bytes,
+                )
+                self._producer.flush(5.0)
+                self.log(
+                    "info",
+                    "Registration request sent.",
+                    topic=self._conf["register_topic"],
+                    corr_id=corr_id,
+                )
+            except Exception as e:
+                raise RuntimeError(f"Registration submission failed: {e}")
+
+            # --- 3) دریافت پاسخ رجیستر ---
             while time.time() < deadline:
                 msg = self._register_consumer.poll(1.0)
                 if msg is None:
@@ -332,8 +364,10 @@ class ClientAuth(object):
                     raise KafkaException(msg.error())
 
                 raw_headers = msg.headers() or []
-                hdrs = {k: (v.decode("utf-8") if isinstance(v, (bytes, bytearray)) else v)
-                        for k, v in raw_headers}
+                hdrs = {
+                    k: (v.decode("utf-8") if isinstance(v, (bytes, bytearray)) else v)
+                    for k, v in raw_headers
+                }
 
                 # باید پاسخ خودمان باشد (corr_id یا client_tmp_id یکی بخورد)
                 if hdrs.get("corr_id") != corr_id and hdrs.get("client_tmp_id") != self.client_tmp_id:
@@ -343,6 +377,7 @@ class ClientAuth(object):
                 try:
                     payload = json.loads(msg.value().decode("utf-8"))
                 except Exception:
+                    # پاسخ نامعتبر؛ دنبال بعدی می‌گردیم
                     continue
 
                 response = payload
@@ -351,34 +386,39 @@ class ClientAuth(object):
             if response is None:
                 raise TimeoutError("Registration response not received within the specified time.")
 
-            # --- پردازش پاسخ ---
+            # --- 4) پردازش پاسخ و ذخیره‌ی هویت ---
             server_client_id = response.get("client_id") or self.client_id
             self.client_id = server_client_id
             self.auth_token = response.get("auth_token")
+
             exp_iso = response.get("expires_at")
             self.token_expires_at = (
                 datetime.fromisoformat(exp_iso)
-                if exp_iso else (datetime.utcnow().replace(tzinfo=timezone.utc) + timedelta(hours=24))
+                if exp_iso
+                else (datetime.utcnow().replace(tzinfo=timezone.utc) + timedelta(hours=24))
             )
 
             if not self.client_id or not self.auth_token:
                 raise ValueError("The registration response is incomplete (client_id or auth_token not present)")
 
-            # ذخیره هویت برای بوت‌های بعدی
             _save_cached_identity(
                 client_id=self.client_id,
                 auth_token=self.auth_token,
-                expires_at=self.token_expires_at.isoformat()
+                expires_at=self.token_expires_at.isoformat(),
             )
 
-            self.log("info", "Successful registration",
-                     client_id=self.client_id, expires_at=self.token_expires_at.isoformat())
+            self.log(
+                "info",
+                "Successful registration",
+                client_id=self.client_id,
+                expires_at=self.token_expires_at.isoformat(),
+            )
 
-            # استارت heartbeat
+            # --- 5) استارت heartbeat ---
             self._start_heartbeat()
 
         finally:
-            # ←←← این همان بخش درخواستیِ شماست
+            # بستن consumer موقتیِ رجیستر
             try:
                 self._register_consumer.close()
             except Exception:
