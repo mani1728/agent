@@ -2,10 +2,13 @@
 فایل: agent/transport/gateway_adapter.py
 مسئولیت: اتصال امن به Edge Gateway از طریق HTTPS + mTLS
 """
-import requests
-import json
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
 import logging
 from typing import List, Dict, Any, Optional
+import requests
+
 from .base import ITransportClient
 from .models import CommandEnvelope, ResponseEnvelope
 
@@ -26,7 +29,6 @@ class GatewayHttpTransport(ITransportClient):
         self.agent_id = agent_id
         self.timeout = timeout
 
-        # پیکربندی Session برای Connection Pooling و mTLS
         self.session = requests.Session()
         if client_cert_path and client_key_path:
             self.session.cert = (client_cert_path, client_key_path)
@@ -39,7 +41,7 @@ class GatewayHttpTransport(ITransportClient):
         })
 
     def start(self) -> None:
-        logger.info("Gateway Transport Initialized for Gateway: %s", self.gateway_url)
+        logger.info("Gateway Transport Initialized for: %s", self.gateway_url)
 
     def stop(self) -> None:
         self.session.close()
@@ -51,7 +53,7 @@ class GatewayHttpTransport(ITransportClient):
             resp = self.session.get(url, timeout=timeout_sec)
             if resp.status_code == 200:
                 raw_commands = resp.json().get("commands", [])
-                envelopes = []
+                envelopes: List[CommandEnvelope] = []
                 for cmd in raw_commands:
                     envelopes.append(CommandEnvelope(
                         command_id=cmd["command_id"],
@@ -64,7 +66,7 @@ class GatewayHttpTransport(ITransportClient):
                     ))
                 return envelopes
             elif resp.status_code == 204:
-                return []  # بدون دستور جدید
+                return []
             else:
                 logger.warning("Gateway returned status %s on polling", resp.status_code)
                 return []
@@ -106,3 +108,4 @@ class GatewayHttpTransport(ITransportClient):
             self.session.post(url, timeout=self.timeout)
         except requests.exceptions.RequestException as ex:
             logger.error("Failed to ack command %s: %s", command_id, ex)
+

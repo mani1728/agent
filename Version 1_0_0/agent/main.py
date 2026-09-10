@@ -1,3 +1,7 @@
+from transport.models import ResponseEnvelope, CommandEnvelope
+from transport.base import ITransportClient
+from transport.gateway_adapter import GatewayHttpTransport
+
 class AgentWorker:
     def __init__(self, transport: ITransportClient, mt5_manager):
         self.transport = transport
