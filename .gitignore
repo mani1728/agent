@@ -8,3 +8,4 @@ __pycache__/*
 test_code.py
 /markdown-cheat-sheet.md
 agent_identity.json
+./agent-main.zip
