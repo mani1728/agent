@@ -22,7 +22,7 @@ Version 1_0_0/agent/logs/app.log
 .obsidian/
 .idea/
 .vscode/
-
+Version 1_0_0/agent/docs/*
 # فایل‌های موقت
 *.bak
 *.saved.bak
