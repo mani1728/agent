@@ -25,14 +25,18 @@ MetaTrader 5 Manager
             v
        MetaTrader5
 
-این فایل نباید مسئول:
+این فایل مسئول موارد زیر نیست:
 - Kafka
 - HTTP
 - Retry شبکه
 - Persistence
 - Transport acknowledgement
 - Worker lifecycle
-باشد.
+
+نکته:
+- mt5_utils.py مسئول تبدیل عمومی پارامترها و serialization است.
+- تبدیل datetime در این Manager عمداً جدا باقی مانده است، زیرا
+  Manager برای عملیات History/Data باید از mt5.timezone استفاده کند.
 """
 
 from __future__ import annotations
@@ -62,11 +66,26 @@ try:
     # Target architecture
     from agent.infrastructure.config_manager import cfg
 except ImportError:
-    # Temporary compatibility with the existing Legacy layout.
-    #
-    # This fallback can be removed once infrastructure/config_manager.py
-    # is migrated and verified.
+    # Temporary compatibility with existing Legacy layout.
     from config_manager import cfg
+
+
+# ---------------------------------------------------------------------
+# Shared MT5 utilities
+# ---------------------------------------------------------------------
+
+try:
+    from agent.core.mt5_utils import (
+        convert_params,
+        safe_serialize,
+    )
+except ImportError:
+    # Compatibility when the package is executed from the
+    # legacy working directory/layout.
+    from mt5_utils import (
+        convert_params,
+        safe_serialize,
+    )
 
 
 # ---------------------------------------------------------------------
@@ -87,6 +106,11 @@ def _parse_iso_dt(
     - naive datetime -> localized using requested timezone
     - ISO string with Z -> supported
     - ISO string without timezone -> localized
+
+    این تابع عمداً با parse_iso_dt در mt5_utils یکی نشده است؛
+    زیرا mt5_utils.parse_iso_dt() طبق قرارداد همیشه UTC برمی‌گرداند،
+    اما عملیات History/Market Data این Manager باید از timezone
+    تنظیم‌شده در mt5.timezone استفاده کند.
     """
 
     if value is None:
@@ -104,6 +128,11 @@ def _parse_iso_dt(
         )
 
     text = value.strip()
+
+    if not text:
+        raise ValueError(
+            "datetime must not be empty"
+        )
 
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
@@ -125,6 +154,8 @@ def _safe_asdict(obj: Any) -> Any:
     """
     Convert common MT5/pandas objects into serializable structures.
 
+    خروجی این تابع عمداً با Legacy سازگار نگه داشته شده است.
+
     Supported:
     - namedtuple / MT5 structures
     - lists
@@ -139,9 +170,15 @@ def _safe_asdict(obj: Any) -> Any:
         try:
             return obj._asdict()
         except Exception:
-            return str(obj)
+            return safe_serialize(obj)
 
     if isinstance(obj, list):
+        return [
+            _safe_asdict(item)
+            for item in obj
+        ]
+
+    if isinstance(obj, tuple):
         return [
             _safe_asdict(item)
             for item in obj
@@ -163,7 +200,8 @@ def _safe_asdict(obj: Any) -> Any:
     except Exception:
         pass
 
-    return obj
+    # Use the shared serializer only as a final fallback.
+    return safe_serialize(obj)
 
 
 def _comma_join(
@@ -203,24 +241,13 @@ class Mt5_Manager:
     def _mt5_cfg(self) -> Dict[str, Any]:
         """
         Return the latest MT5 configuration.
-
-        Expected configuration:
-
-        {
-            "mt5": {
-                "login": 0,
-                "password": "",
-                "server": "",
-                "path": "",
-                "timeout_sec": 10,
-                "symbols": [],
-                "timezone": "UTC"
-            }
-        }
         """
 
         try:
-            config = cfg().get("mt5", {})
+            config = cfg().get(
+                "mt5",
+                {},
+            )
         except Exception:
             self.log.exception(
                 "Failed to read MT5 configuration."
@@ -241,16 +268,21 @@ class Mt5_Manager:
             or "UTC"
         )
 
-        timezone_name = str(timezone_name).strip()
+        timezone_name = str(
+            timezone_name
+        ).strip()
 
         if not timezone_name:
             timezone_name = "UTC"
 
         try:
-            return pytz.timezone(timezone_name)
+            return pytz.timezone(
+                timezone_name
+            )
         except Exception:
             self.log.warning(
-                "Invalid MT5 timezone; falling back to UTC."
+                "Invalid MT5 timezone; "
+                "falling back to UTC."
             )
 
             return pytz.timezone("UTC")
@@ -265,8 +297,14 @@ class Mt5_Manager:
             or []
         )
 
-        if isinstance(symbols, list) and symbols:
-            return str(symbols[0])
+        if isinstance(
+            symbols,
+            list,
+        ) and symbols:
+
+            return str(
+                symbols[0]
+            )
 
         return None
 
@@ -281,16 +319,20 @@ class Mt5_Manager:
 
         try:
             info = mt5.terminal_info()
+
         except Exception:
             self.log.exception(
                 "Failed to query MT5 terminal_info."
             )
             return False
 
-        if info and getattr(
-            info,
-            "connected",
-            False,
+        if (
+            info
+            and getattr(
+                info,
+                "connected",
+                False,
+            )
         ):
             return True
 
@@ -319,12 +361,16 @@ class Mt5_Manager:
 
         if not target:
             self.log.error(
-                "Symbol is empty and no default symbol exists."
+                "Symbol is empty and no default "
+                "symbol exists."
             )
             return False
 
         try:
-            info = mt5.symbol_info(target)
+            info = mt5.symbol_info(
+                target
+            )
+
         except Exception:
             self.log.exception(
                 "Failed to get symbol information."
@@ -338,12 +384,18 @@ class Mt5_Manager:
             )
             return False
 
-        if not getattr(info, "visible", False):
+        if not getattr(
+            info,
+            "visible",
+            False,
+        ):
+
             try:
                 selected = mt5.symbol_select(
                     target,
                     True,
                 )
+
             except Exception:
                 self.log.exception(
                     "Failed to select symbol."
@@ -491,10 +543,13 @@ class Mt5_Manager:
             try:
                 info = mt5.terminal_info()
 
-                if info and getattr(
-                    info,
-                    "connected",
-                    False,
+                if (
+                    info
+                    and getattr(
+                        info,
+                        "connected",
+                        False,
+                    )
                 ):
                     self.log.info(
                         "MT5 already connected; "
@@ -521,7 +576,8 @@ class Mt5_Manager:
 
                 if not initialized:
                     self.log.error(
-                        "Failed to initialize MT5. err=%s",
+                        "Failed to initialize MT5. "
+                        "err=%s",
                         mt5.last_error(),
                     )
                     return None
@@ -556,8 +612,8 @@ class Mt5_Manager:
 
                 if not success:
                     self.log.error(
-                        "Failed to login to configured MT5 account. "
-                        "err=%s",
+                        "Failed to login to configured "
+                        "MT5 account. err=%s",
                         mt5.last_error(),
                     )
                     return None
@@ -587,7 +643,8 @@ class Mt5_Manager:
 
                 if info is None:
                     self.log.error(
-                        "Failed to get terminal_info. err=%s",
+                        "Failed to get terminal_info. "
+                        "err=%s",
                         mt5.last_error(),
                     )
                     return None
@@ -628,7 +685,8 @@ class Mt5_Manager:
 
                 if account is None:
                     self.log.error(
-                        "Failed to get account_info. err=%s",
+                        "Failed to get account_info. "
+                        "err=%s",
                         mt5.last_error(),
                     )
                     return None
@@ -768,7 +826,9 @@ class Mt5_Manager:
             )
 
             try:
-                info = mt5.symbol_info(target)
+                info = mt5.symbol_info(
+                    target
+                )
 
                 return (
                     _safe_asdict(info)
@@ -901,7 +961,8 @@ class Mt5_Manager:
 
                 if not result:
                     self.log.error(
-                        "market_book_add failed. err=%s",
+                        "market_book_add failed. "
+                        "err=%s",
                         mt5.last_error(),
                     )
 
@@ -915,7 +976,8 @@ class Mt5_Manager:
 
                 if book is None:
                     self.log.error(
-                        "market_book_get failed. err=%s",
+                        "market_book_get failed. "
+                        "err=%s",
                         mt5.last_error(),
                     )
                     return None
@@ -933,7 +995,8 @@ class Mt5_Manager:
 
                 if not result:
                     self.log.error(
-                        "market_book_release failed. err=%s",
+                        "market_book_release failed. "
+                        "err=%s",
                         mt5.last_error(),
                     )
 
@@ -1010,6 +1073,7 @@ class Mt5_Manager:
         timezone = self._tz()
 
         try:
+
             date_from_parsed = (
                 _parse_iso_dt(
                     date_from,
@@ -1085,7 +1149,8 @@ class Mt5_Manager:
 
                 if raw is None:
                     self.log.error(
-                        "copy_rates_* failed. err=%s",
+                        "copy_rates_* failed. "
+                        "err=%s",
                         mt5.last_error(),
                     )
                     return None
@@ -1141,8 +1206,13 @@ class Mt5_Manager:
 
                 elif method == "from_pos":
 
-                    # MT5 does not expose copy_ticks_from_pos().
-                    # Preserve existing Legacy fallback.
+                    # MetaTrader5 does not expose
+                    # copy_ticks_from_pos().
+                    #
+                    # Legacy behavior is preserved:
+                    # from_pos falls back to copy_ticks_from()
+                    # using date_from as the starting point.
+
                     if date_from_parsed is None:
                         self.log.error(
                             "ticks/from_pos fallback "
@@ -1178,7 +1248,8 @@ class Mt5_Manager:
 
                 if raw is None:
                     self.log.error(
-                        "copy_ticks_* failed. err=%s",
+                        "copy_ticks_* failed. "
+                        "err=%s",
                         mt5.last_error(),
                     )
                     return None
@@ -1200,22 +1271,40 @@ class Mt5_Manager:
                     {
                         "time": row.get("time"),
                         "bid": float(
-                            row.get("bid", 0.0)
+                            row.get(
+                                "bid",
+                                0.0,
+                            )
                         ),
                         "ask": float(
-                            row.get("ask", 0.0)
+                            row.get(
+                                "ask",
+                                0.0,
+                            )
                         ),
                         "last": float(
-                            row.get("last", 0.0)
+                            row.get(
+                                "last",
+                                0.0,
+                            )
                         ),
                         "volume": float(
-                            row.get("volume", 0.0)
+                            row.get(
+                                "volume",
+                                0.0,
+                            )
                         ),
                         "time_msc": int(
-                            row.get("time_msc", 0)
+                            row.get(
+                                "time_msc",
+                                0,
+                            )
                         ),
                         "flags": int(
-                            row.get("flags", 0)
+                            row.get(
+                                "flags",
+                                0,
+                            )
                         ),
                     }
                     for _, row
@@ -1224,7 +1313,9 @@ class Mt5_Manager:
 
             self._df_preview(
                 dataframe,
-                name=f"{data_type}/{method}",
+                name=(
+                    f"{data_type}/{method}"
+                ),
             )
 
             return {
@@ -1298,7 +1389,8 @@ class Mt5_Manager:
 
                 if orders is None:
                     self.log.error(
-                        "orders_get failed. err=%s",
+                        "orders_get failed. "
+                        "err=%s",
                         mt5.last_error(),
                     )
 
@@ -1308,7 +1400,7 @@ class Mt5_Manager:
                     }
 
                 raw_orders = [
-                    order._asdict()
+                    _safe_asdict(order)
                     for order in orders
                 ]
 
@@ -1401,9 +1493,44 @@ class Mt5_Manager:
         def prepare_request(
             request_data: Dict[str, Any],
         ) -> Dict[str, Any]:
+            """
+            Prepare an MT5 trade request.
+
+            Shared mt5_utils conversion is applied only to the
+            request dictionary. Business defaults remain here so
+            Legacy trading behavior is preserved.
+            """
+
+            if not isinstance(
+                request_data,
+                dict,
+            ):
+                raise ValueError(
+                    "request must be a dictionary."
+                )
+
+            # Use shared conversion utility.
+            #
+            # This converts:
+            #   action
+            #   type
+            #   type_time
+            #   type_filling
+            #
+            # without mutating the caller's dictionary.
+            converted = convert_params(
+                {
+                    "request": dict(
+                        request_data
+                    )
+                }
+            )
 
             prepared = dict(
-                request_data or {}
+                converted.get(
+                    "request",
+                    {},
+                )
             )
 
             target_symbol = (
@@ -1443,6 +1570,14 @@ class Mt5_Manager:
                 is not None
                 else order_type
             )
+
+            # If request contains order_type at the application
+            # level but not MT5 request "type", preserve compatibility.
+            if (
+                prepared.get("type") is None
+                and request_order_type is not None
+            ):
+                prepared["type"] = request_order_type
 
             if (
                 prepared.get("action")
@@ -1505,6 +1640,7 @@ class Mt5_Manager:
                 return None
 
             try:
+
                 prepared = prepare_request(
                     request
                 )
@@ -1515,7 +1651,8 @@ class Mt5_Manager:
 
                 if result is None:
                     self.log.error(
-                        "order_check failed. err=%s",
+                        "order_check failed. "
+                        "err=%s",
                         mt5.last_error(),
                     )
                     return None
@@ -1635,8 +1772,12 @@ class Mt5_Manager:
 
             # ---------------------------------------------------------
             # Legacy behavior preserved:
+            #
             # first attempt
             # second attempt after 500ms
+            #
+            # This is MT5 order retry behavior and is intentionally
+            # NOT converted into the future network reliability layer.
             # ---------------------------------------------------------
 
             self.log.info(
@@ -1648,6 +1789,7 @@ class Mt5_Manager:
                 result = mt5.order_send(
                     prepared
                 )
+
             except Exception:
                 self.log.exception(
                     "Exception during first order_send."
@@ -1679,6 +1821,7 @@ class Mt5_Manager:
                 result_retry = mt5.order_send(
                     prepared
                 )
+
             except Exception:
                 self.log.exception(
                     "Exception during second order_send."
@@ -1893,7 +2036,8 @@ class Mt5_Manager:
 
                 if positions is None:
                     self.log.error(
-                        "positions_get failed. err=%s",
+                        "positions_get failed. "
+                        "err=%s",
                         mt5.last_error(),
                     )
                     return None
@@ -2028,7 +2172,8 @@ class Mt5_Manager:
 
                     if orders is None:
                         self.log.error(
-                            "history_orders_get failed. err=%s",
+                            "history_orders_get failed. "
+                            "err=%s",
                             mt5.last_error(),
                         )
                         return None
@@ -2119,7 +2264,8 @@ class Mt5_Manager:
 
                     if deals is None:
                         self.log.error(
-                            "history_deals_get failed. err=%s",
+                            "history_deals_get failed. "
+                            "err=%s",
                             mt5.last_error(),
                         )
                         return None
