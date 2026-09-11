@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import sys
 import threading
@@ -17,7 +18,6 @@ except ImportError:  # pragma: no cover - non-Windows environments
     win32service = None
     win32serviceutil = None
 
-from .main import _load_legacy_main
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,16 @@ SERVICE_DESCRIPTION = (
 )
 
 SERVICE_STOP_TIMEOUT_SEC = 30.0
+
+
+def _load_legacy_main():
+    """
+    Load the application's legacy bootstrap module.
+
+    Kept as a lazily-imported helper so service-host import does not
+    create circular module initialization issues.
+    """
+    return importlib.import_module("agent.main")
 
 
 class ServiceHostError(RuntimeError):

@@ -31,6 +31,11 @@ from typing import Any, Mapping, Optional
 
 from agent.contracts.command import CommandEnvelope
 from agent.contracts.response import ResponseEnvelope
+from agent.security.command_authorizer import (
+    CommandAuthorizationError,
+    CommandAuthorizer,
+    build_default_authorizer,
+)
 
 from .dispatcher import Dispatcher
 
@@ -62,8 +67,11 @@ class CommandExecutor:
     def __init__(
         self,
         dispatcher: Optional[Dispatcher] = None,
+        *,
+        authorizer: Optional[CommandAuthorizer] = None,
     ) -> None:
         self._dispatcher = dispatcher or Dispatcher()
+        self._authorizer = authorizer or build_default_authorizer()
 
     # ------------------------------------------------------------------
     # Public API
@@ -82,6 +90,19 @@ class CommandExecutor:
         if not isinstance(command, CommandEnvelope):
             raise TypeError(
                 "command must be an instance of CommandEnvelope"
+            )
+
+        try:
+            self._authorizer.authorize(command)
+        except CommandAuthorizationError as exc:
+            return ResponseEnvelope.error(
+                correlation_id=command.correlation_id,
+                error_code="COMMAND_UNAUTHORIZED",
+                error_message=str(exc),
+                metadata={
+                    "target_class": command.target_class,
+                    "target_method": command.target_method,
+                },
             )
 
         return self._dispatcher.dispatch(command)

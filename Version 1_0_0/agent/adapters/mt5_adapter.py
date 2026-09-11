@@ -27,9 +27,10 @@ This module does not implement:
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
-from agent.core.meta_trader_manager import Mt5_Manager
+if TYPE_CHECKING:
+    from agent.core.meta_trader_manager import Mt5_Manager
 
 
 class Mt5Adapter:
@@ -37,9 +38,14 @@ class Mt5Adapter:
 
     def __init__(
         self,
-        manager: Optional[Mt5_Manager] = None,
+        manager: Optional["Mt5_Manager"] = None,
     ) -> None:
-        self._manager = manager or Mt5_Manager()
+        if manager is None:
+            from agent.core.meta_trader_manager import Mt5_Manager
+
+            manager = Mt5_Manager()
+
+        self._manager = manager
 
     @property
     def manager(self) -> Mt5_Manager:

@@ -44,6 +44,7 @@ def _sanitize_details(value: Mapping[str, Any]) -> JsonDict:
         "auth_token",
         "access_token",
         "refresh_token",
+        "authorization",
         "token",
         "password",
         "secret",
@@ -202,8 +203,12 @@ class HeartbeatPayload:
 
         schema_version = payload.get(
             "schema_version",
-            payload.get("schema"),
-            SCHEMA_VERSION_HEARTBEAT,
+            (
+                payload.get("schema")
+                if isinstance(payload, Mapping)
+                else None
+            )
+            or SCHEMA_VERSION_HEARTBEAT,
         )
 
         details = payload.get(

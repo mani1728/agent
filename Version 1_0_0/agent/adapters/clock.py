@@ -1,36 +1,33 @@
-# Path: Version 1_0_0/agent/adapters/clock.py
+"""Clock adapter compatibility layer.
 
-"""Clock adapter.
-
-Provides a small abstraction over system time so that core components do
-not depend directly on the Python time/datetime modules.
-
-The adapter distinguishes between:
-
-- wall-clock time: timestamps, logging and protocol payloads
-- monotonic time: timeouts, deadlines and elapsed-time measurement
-
-No transport, persistence or business logic belongs here.
+Legacy adapter-style static-time helpers are preserved while delegating all
+clock behavior to the canonical infrastructure clock implementation.
 """
 
 from __future__ import annotations
 
-import time
-from datetime import datetime, timezone
-from typing import Optional
+from typing import Any
+
+from agent.infrastructure.clock import SystemClock as InfrastructureSystemClock
 
 
 class Clock:
-    """System clock abstraction."""
+    """Compatibility clock abstraction for legacy adapter imports.
 
-    # ------------------------------------------------------------------
-    # Wall clock
-    # ------------------------------------------------------------------
+    Kept for backward compatibility with call sites that import
+    ``agent.adapters.clock.Clock``.
+
+    The implementation is intentionally small and delegates to
+    ``agent.infrastructure.clock.SystemClock`` to avoid duplicated
+    time behavior.
+    """
+
+    _impl = InfrastructureSystemClock()
 
     @staticmethod
-    def now() -> datetime:
+    def now() -> Any:
         """Return the current UTC-aware wall-clock datetime."""
-        return datetime.now(timezone.utc)
+        return Clock._impl.now()
 
     @classmethod
     def now_iso(cls) -> str:
@@ -40,42 +37,23 @@ class Clock:
     @staticmethod
     def unix_time() -> float:
         """Return the current Unix timestamp."""
-        return time.time()
-
-    # ------------------------------------------------------------------
-    # Monotonic clock
-    # ------------------------------------------------------------------
+        return Clock._impl.timestamp()
 
     @staticmethod
     def monotonic() -> float:
-        """Return a monotonic clock value.
-
-        This value must only be used for measuring elapsed time and
-        calculating deadlines. It must not be interpreted as a timestamp.
-        """
-        return time.monotonic()
+        """Return a monotonic clock value."""
+        return Clock._impl.monotonic()
 
     @classmethod
-    def elapsed(
-        cls,
-        started_at: float,
-    ) -> float:
+    def elapsed(cls, started_at: float) -> float:
         """Return elapsed monotonic time in seconds."""
         if not isinstance(started_at, (int, float)):
-            raise TypeError(
-                "started_at must be a number"
-            )
+            raise TypeError("started_at must be a number")
 
-        return max(
-            0.0,
-            cls.monotonic() - float(started_at),
-        )
+        return max(0.0, cls.monotonic() - float(started_at))
 
     @classmethod
-    def deadline(
-        cls,
-        timeout_seconds: float,
-    ) -> float:
+    def deadline(cls, timeout_seconds: float) -> float:
         """Create a monotonic deadline."""
         if timeout_seconds < 0:
             raise ValueError(
@@ -85,32 +63,21 @@ class Clock:
         return cls.monotonic() + float(timeout_seconds)
 
     @classmethod
-    def remaining(
-        cls,
-        deadline: float,
-    ) -> float:
+    def remaining(cls, deadline: float) -> float:
         """Return remaining seconds until a monotonic deadline."""
         if not isinstance(deadline, (int, float)):
-            raise TypeError(
-                "deadline must be a number"
-            )
+            raise TypeError("deadline must be a number")
 
-        return max(
-            0.0,
-            float(deadline) - cls.monotonic(),
-        )
+        return max(0.0, float(deadline) - cls.monotonic())
 
     @classmethod
-    def expired(
-        cls,
-        deadline: float,
-    ) -> bool:
+    def expired(cls, deadline: float) -> bool:
         """Return True when a monotonic deadline has expired."""
         return cls.remaining(deadline) <= 0.0
 
 
 class SystemClock(Clock):
-    """Backward-compatible semantic alias for the system clock."""
+    """Backward-compatible alias for the system clock implementation."""
 
 
 __all__ = [

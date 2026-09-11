@@ -66,6 +66,7 @@ _SENSITIVE_KEYS: frozenset[str] = frozenset(
     {
         "auth_token",
         "token",
+        "authorization",
         "password",
         "secret",
         "api_key",

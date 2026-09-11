@@ -1,12 +1,8 @@
-# Path: Version 1_0_0/agent/health/heartbeat.py
+"""Health heartbeat compatibility module.
 
-"""Agent heartbeat management.
-
-Provides a small, transport-independent heartbeat manager for reporting
-the Agent's current operational state.
-
-This module does not perform Kafka/HTTP communication directly. The caller
-provides a publisher callback when heartbeat delivery is required.
+This module preserves the historical ``HeartbeatPayload``/``HeartbeatStatus``
+API used by legacy health utilities while internally aligning with the
+canonical contract payload from ``agent.contracts.heartbeat``.
 """
 
 from __future__ import annotations
@@ -14,35 +10,58 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Any, Callable, Mapping, Optional
 
+from agent.contracts.heartbeat import (
+    HeartbeatPayload as ContractHeartbeatPayload,
+    HeartbeatStatus as ContractHeartbeatStatus,
+)
 
-class HeartbeatStatus(str, Enum):
-    """Operational status reported by the Agent."""
 
-    READY = "ready"
-    DEGRADED = "degraded"
-    UNAVAILABLE = "unavailable"
+HeartbeatStatus = ContractHeartbeatStatus
 
 
 @dataclass(frozen=True)
 class HeartbeatPayload:
-    """Serializable heartbeat payload."""
+    """Compatibility heartbeat payload using historical ``client_id`` naming."""
 
     client_id: str
     status: HeartbeatStatus
-    timestamp: str
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     details: Mapping[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema": "HeartbeatV1",
-            "client_id": self.client_id,
-            "status": self.status.value,
-            "timestamp": self.timestamp,
-            "details": dict(self.details),
-        }
+    def __post_init__(self) -> None:
+        if not isinstance(self.client_id, str) or not self.client_id.strip():
+            raise ValueError("client_id must be a non-empty string")
+
+        object.__setattr__(
+            self,
+            "client_id",
+            self.client_id.strip(),
+        )
+
+        normalized_status = (
+            self.status
+            if isinstance(self.status, HeartbeatStatus)
+            else HeartbeatStatus(str(self.status))
+        )
+
+        object.__setattr__(
+            self,
+            "status",
+            normalized_status,
+        )
+
+        if not isinstance(self.timestamp, str) or not self.timestamp.strip():
+            raise ValueError("timestamp must be a non-empty string")
+
+        if not isinstance(self.details, Mapping):
+            raise TypeError("details must be a mapping")
+
+    @property
+    def agent_id(self) -> str:
+        """Canonical heartbeat identifier alias."""
+        return self.client_id
 
     @classmethod
     def create(
@@ -51,19 +70,31 @@ class HeartbeatPayload:
         status: HeartbeatStatus = HeartbeatStatus.READY,
         details: Optional[Mapping[str, Any]] = None,
     ) -> "HeartbeatPayload":
-        if not isinstance(client_id, str) or not client_id.strip():
-            raise ValueError("client_id must be a non-empty string")
-
         return cls(
-            client_id=client_id.strip(),
-            status=(
-                status
-                if isinstance(status, HeartbeatStatus)
-                else HeartbeatStatus(str(status))
-            ),
+            client_id=client_id,
+            status=status,
             timestamp=datetime.now(timezone.utc).isoformat(),
             details=dict(details or {}),
         )
+
+    def to_contract(self) -> ContractHeartbeatPayload:
+        """Return the canonical contract payload for transport consumption."""
+        return ContractHeartbeatPayload(
+            agent_id=self.client_id,
+            status=self.status,
+            timestamp=self.timestamp,
+            details=dict(self.details),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the legacy heartbeat payload dictionary."""
+        return {
+            "schema": "HeartbeatV1",
+            "client_id": self.client_id,
+            "status": self.status.value,
+            "timestamp": self.timestamp,
+            "details": dict(self.details),
+        }
 
 
 HeartbeatPublisher = Callable[[HeartbeatPayload], Any]
@@ -144,11 +175,7 @@ class HeartbeatManager:
             return payload
 
     def publish(self) -> HeartbeatPayload:
-        """
-        Build and publish the current heartbeat.
-
-        Raises RuntimeError when no publisher has been configured.
-        """
+        """Build and publish the current heartbeat."""
         if self._publisher is None:
             raise RuntimeError(
                 "Heartbeat publisher is not configured"
@@ -170,7 +197,7 @@ class HeartbeatManager:
             self._publisher = publisher
 
     def snapshot(self) -> dict[str, Any]:
-        """Return the current heartbeat state."""
+        """Return the current heartbeat state as a legacy payload dict."""
         payload = self.build_payload()
         return payload.to_dict()
 

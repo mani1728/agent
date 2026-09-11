@@ -85,6 +85,7 @@ _SENSITIVE_KEYS: frozenset[str] = frozenset(
         "auth_token",
         "token",
         "password",
+        "authorization",
         "secret",
         "api_key",
         "private_key",
@@ -325,6 +326,7 @@ class CommandEnvelope:
         default_target_class: Optional[str] = None,
         priority: int = 1,
         correlation_id: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
     ) -> "CommandEnvelope":
         """Create a CommandEnvelope from a dictionary.
 
@@ -416,17 +418,30 @@ class CommandEnvelope:
         # Metadata
         # --------------------------------------------------------------------
 
-        metadata = _as_json_dict(
+        source_metadata = _as_json_dict(
             source.get("metadata", {}),
             "metadata",
         )
 
         # Remove sensitive fields from explicit metadata.
-        metadata = {
+        normalized_metadata = {
             key: item
-            for key, item in metadata.items()
+            for key, item in source_metadata.items()
             if key not in _SENSITIVE_KEYS
         }
+        if metadata is not None:
+            explicit_metadata = _as_json_dict(
+                metadata,
+                "metadata",
+            )
+
+            normalized_metadata.update(
+                {
+                    key: item
+                    for key, item in explicit_metadata.items()
+                    if key not in _SENSITIVE_KEYS
+                }
+            )
 
         # --------------------------------------------------------------------
         # Preserve unknown non-sensitive top-level fields as metadata.
@@ -442,7 +457,7 @@ class CommandEnvelope:
             if key in _SENSITIVE_KEYS:
                 continue
 
-            metadata[key] = item
+            normalized_metadata[key] = item
 
         # --------------------------------------------------------------------
         # Correlation ID
@@ -499,7 +514,7 @@ class CommandEnvelope:
             correlation_id=str(resolved_correlation_id),
             created_at=str(created_at),
             schema_version=str(schema_version),
-            metadata=metadata,
+            metadata=normalized_metadata,
         )
 
     # ------------------------------------------------------------------------

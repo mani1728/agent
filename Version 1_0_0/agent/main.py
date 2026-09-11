@@ -51,7 +51,6 @@ try:  # Package-safe execution: python -m agent
     from .infrastructure.config_manager import cfg
     from .security.client_auth import ClientAuth
     from .transport.factory import TransportFactory
-    from .transport.kafka.listener import KafkaListener
 except ImportError:  # Direct execution compatibility: python agent/main.py
     from agent.core.command_executor import CommandExecutor
     from agent.core.worker import AgentWorker
@@ -59,7 +58,11 @@ except ImportError:  # Direct execution compatibility: python agent/main.py
     from agent.infrastructure.config_manager import cfg
     from agent.security.client_auth import ClientAuth
     from agent.transport.factory import TransportFactory
-    from agent.transport.kafka.listener import KafkaListener
+
+try:
+    from .transport.kafka.listener import KafkaListener as _KafkaListener
+except Exception:  # pragma: no cover - optional dependency
+    _KafkaListener = None
 
 
 # ======================================================================
@@ -302,7 +305,13 @@ def main() -> None:
             )
             app_logger.info("AgentWorker path selected by feature flag")
         else:
-            listener = KafkaListener(config)
+            if _KafkaListener is None:
+                raise RuntimeError(
+                    "Kafka listener dependency is unavailable "
+                    "(missing runtime dependency)"
+                )
+
+            listener = _KafkaListener(config)
             runtime_thread = threading.Thread(
                 target=listener.listen,
                 name="KafkaListener",

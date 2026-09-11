@@ -221,13 +221,34 @@ class GatewayHttpTransport(ITransportClient):
                 )
                 continue
 
+            command_payload = dict(raw_command)
+
+            command_metadata = command_payload.get("metadata")
+
+            if not isinstance(command_metadata, Mapping):
+                command_metadata = {}
+
+            command_metadata.update(
+                {
+                    "transport": "gateway",
+                    "request_index": index,
+                }
+            )
+
+            command_payload.update(
+                {
+                    "metadata": command_metadata,
+                }
+            )
+
+            command_payload.setdefault(
+                "metadata",
+                {},
+            )
+
             try:
                 envelope = CommandEnvelope.from_dict(
-                    raw_command,
-                    metadata={
-                        "transport": "gateway",
-                        "request_index": index,
-                    },
+                    command_payload,
                 )
             except (TypeError, ValueError) as exc:
                 logger.warning(

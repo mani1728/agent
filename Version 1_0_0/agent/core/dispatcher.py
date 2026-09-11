@@ -27,12 +27,15 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional
 
 from agent.contracts.command import CommandEnvelope
 from agent.contracts.response import ResponseEnvelope, ResponseStatus
 
-from .meta_trader_manager import Mt5_Manager
+from agent.adapters.mt5_adapter import Mt5Adapter
+
+if TYPE_CHECKING:
+    from .meta_trader_manager import Mt5_Manager
 
 
 logger = logging.getLogger(__name__)
@@ -86,7 +89,8 @@ class Dispatcher:
 
     def __init__(
         self,
-        mt5_manager: Optional[Mt5_Manager] = None,
+        mt5_manager: Optional["Mt5_Manager"] = None,
+        mt5_adapter: Optional[Mt5Adapter] = None,
         allowed_methods: Optional[Mapping[str, Any]] = None,
     ) -> None:
         """
@@ -109,10 +113,13 @@ class Dispatcher:
                 اگر None باشد، DEFAULT_ALLOWED_METHODS استفاده می‌شود.
         """
 
-        self._mt5_manager = mt5_manager or Mt5_Manager()
+        if mt5_adapter is None:
+            mt5_adapter = Mt5Adapter(manager=mt5_manager)
+
+        self._mt5_adapter = mt5_adapter
 
         self._handlers: Dict[str, Any] = {
-            "Mt5_Manager": self._mt5_manager,
+            "Mt5_Manager": self._mt5_adapter,
         }
 
         if allowed_methods is None:
@@ -157,7 +164,7 @@ class Dispatcher:
                 method_name=target_method,
             )
 
-            result = method(command.params)
+            result = method(**command.params)
 
             elapsed_ms = (time.perf_counter() - started) * 1000.0
 

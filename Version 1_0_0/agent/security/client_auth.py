@@ -13,7 +13,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 try:
     import winreg
@@ -176,10 +176,17 @@ class ClientAuth:
     Kafka transport without changing the external behavior.
     """
 
-    def __init__(self, config: Any = None) -> None:
+    def __init__(
+        self,
+        config: Any = None,
+        *,
+        client_meta: Optional[Mapping[str, Any]] = None,
+        logger: Optional[Callable[..., None]] = None,
+    ) -> None:
         self.config = config or cfg()
 
         self._conf_snapshot: dict[str, Any] = {}
+        self._compat_logger = logger
 
         self._refresh_conf()
 
@@ -189,6 +196,10 @@ class ClientAuth:
             "python_version": platform.python_version(),
             "pid": os.getpid(),
         }
+        if client_meta:
+            self.client_meta.update(
+                dict(client_meta)
+            )
 
         self.client_tmp_id = str(uuid.uuid4())
 
