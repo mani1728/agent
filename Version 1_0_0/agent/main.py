@@ -11,7 +11,7 @@ Migration status:
 - Legacy ClientAuth registration/heartbeat is intentionally preserved.
 - Legacy hot-reload configuration is intentionally preserved.
 - Legacy signal/shutdown behavior is intentionally preserved.
-- AgentWorker is NOT wired here yet.
+- AgentWorker is opt-in through app.use_agent_worker.
 - Transport migration will be introduced incrementally in later phases.
 
 Current responsibility:
@@ -41,13 +41,25 @@ import time
 
 
 # ======================================================================
-# Legacy application dependencies
+# Application dependencies
 # ======================================================================
 
-from config_manager import cfg
-from config_logging import setup_logging
-from client_auth import ClientAuth
-from kafka_listener import KafkaListener
+try:  # Package-safe execution: python -m agent
+    from .core.command_executor import CommandExecutor
+    from .core.worker import AgentWorker
+    from .infrastructure.config_logging import setup_logging
+    from .infrastructure.config_manager import cfg
+    from .security.client_auth import ClientAuth
+    from .transport.factory import TransportFactory
+    from .transport.kafka.listener import KafkaListener
+except ImportError:  # Direct execution compatibility: python agent/main.py
+    from agent.core.command_executor import CommandExecutor
+    from agent.core.worker import AgentWorker
+    from agent.infrastructure.config_logging import setup_logging
+    from agent.infrastructure.config_manager import cfg
+    from agent.security.client_auth import ClientAuth
+    from agent.transport.factory import TransportFactory
+    from agent.transport.kafka.listener import KafkaListener
 
 
 # ======================================================================
@@ -108,6 +120,14 @@ def _handle_signal(
     )
 
     _shutdown_event.set()
+
+
+def _config_bool(config, path: str, default: bool = False) -> bool:
+    """Read a JSON-compatible boolean without treating ``\"false\"`` as true."""
+    value = config.get(path, default)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 # ======================================================================
@@ -253,28 +273,51 @@ def main() -> None:
         return
 
     # ------------------------------------------------------------------
-    # 5) Create KafkaListener
+    # 5) Select the opt-in worker path or preserve the legacy listener.
     # ------------------------------------------------------------------
 
+    use_agent_worker = _config_bool(
+        config,
+        "app.use_agent_worker",
+        False,
+    )
+    listener = None
+    worker = None
+    runtime_thread = None
+
     try:
-        listener = KafkaListener(config)
+        if use_agent_worker:
+            transport = TransportFactory.create(config)
+            worker = AgentWorker(
+                CommandExecutor(),
+                transport,
+                poll_timeout_sec=float(
+                    config.get("app.worker_poll_timeout_sec", 1.0)
+                ),
+            )
+            runtime_thread = threading.Thread(
+                target=worker.run,
+                name="AgentWorker",
+                daemon=True,
+            )
+            app_logger.info("AgentWorker path selected by feature flag")
+        else:
+            listener = KafkaListener(config)
+            runtime_thread = threading.Thread(
+                target=listener.listen,
+                name="KafkaListener",
+                daemon=True,
+            )
+            app_logger.info("Legacy KafkaListener path selected")
 
-    except TypeError:
-        app_logger.error(
-            "KafkaListener constructor signature mismatch. "
-            "Expected KafkaListener(cfg: HotReloadConfig). "
-            "Please use the rewritten kafka_listener.py."
-        )
-
+    except Exception:
+        app_logger.exception("Failed to initialize selected runtime path")
         try:
             if ca:
                 ca.stop()
         except Exception:
-            app_logger.exception(
-                "Failed to stop ClientAuth"
-            )
-
-        sys.exit(1)
+            app_logger.exception("Failed to stop ClientAuth")
+        raise
 
     # ------------------------------------------------------------------
     # 6) Register OS signal handlers
@@ -295,24 +338,11 @@ def main() -> None:
         pass
 
     # ------------------------------------------------------------------
-    # 7) Start KafkaListener
+    # 7) Start selected runtime path
     # ------------------------------------------------------------------
 
-    app_logger.info(
-        "KafkaListener starting..."
-    )
-
-    listener_thread = threading.Thread(
-        target=listener.listen,
-        name="KafkaListener",
-        daemon=True,
-    )
-
-    listener_thread.start()
-
-    app_logger.info(
-        "KafkaListener started."
-    )
+    runtime_thread.start()
+    app_logger.info("Runtime path started: worker_enabled=%s", use_agent_worker)
 
     # ------------------------------------------------------------------
     # 8) Main wait loop
@@ -336,21 +366,21 @@ def main() -> None:
             "Shutting down..."
         )
 
-        # Stop KafkaListener first.
+        # Stop the selected command runtime before ClientAuth.
         try:
-            stop_listener = getattr(
-                listener,
-                "stop",
-                None,
-            )
+            if worker is not None:
+                worker.stop()
+            elif listener is not None:
+                listener.stop()
 
-            if callable(stop_listener):
-                stop_listener()
-
+            if runtime_thread is not None:
+                runtime_thread.join(
+                    timeout=float(
+                        config.get("app.shutdown_join_timeout_sec", 10.0)
+                    )
+                )
         except Exception:
-            app_logger.exception(
-                "Failed to stop KafkaListener"
-            )
+            app_logger.exception("Failed to stop command runtime")
 
         # Stop ClientAuth / heartbeat.
         try:

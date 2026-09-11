@@ -6,16 +6,30 @@ import ast
 import json
 import logging
 import threading
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 from uuid import uuid4
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 
 from agent.contracts.command import CommandEnvelope
-from agent.infrastructure.config_manager import HotReloadConfig, cfg
+from agent.infrastructure.config_manager import cfg
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _PendingKafkaMessage:
+    """Commands sharing one Kafka record and its commit handle."""
+
+    message: Any
+    command_ids: set[str] = field(default_factory=set)
+    acknowledged_command_ids: set[str] = field(default_factory=set)
+
+    @property
+    def is_fully_acknowledged(self) -> bool:
+        return self.command_ids == self.acknowledged_command_ids
 
 
 class KafkaListener:
@@ -52,6 +66,8 @@ class KafkaListener:
         self._consumer: Optional[Consumer] = None
 
         self._subscribed_topics: list[str] = []
+        self._pending_by_command_id: dict[str, _PendingKafkaMessage] = {}
+        self._pending_lock = threading.RLock()
 
         self._build_consumer_and_subscribe()
 
@@ -85,6 +101,9 @@ class KafkaListener:
 
         consumer = self._consumer
         self._consumer = None
+
+        with self._pending_lock:
+            self._pending_by_command_id.clear()
 
         if consumer is not None:
             try:
@@ -428,6 +447,8 @@ class KafkaListener:
         partition: Optional[int],
         offset: Optional[int],
         request_index: int,
+        target_class: Optional[str],
+        priority: int,
     ) -> CommandEnvelope:
         """
         Convert one legacy command object into the canonical envelope.
@@ -445,10 +466,23 @@ class KafkaListener:
         if offset is not None:
             metadata["offset"] = offset
 
+        source = dict(command)
+        source_metadata = source.get("metadata", {})
+        if source_metadata is None:
+            source_metadata = {}
+        if not isinstance(source_metadata, Mapping):
+            raise TypeError("command metadata must be an object")
+
+        source["metadata"] = {
+            **dict(source_metadata),
+            **metadata,
+        }
+
         return CommandEnvelope.from_dict(
-            dict(command),
+            source,
+            default_target_class=target_class,
+            priority=priority,
             correlation_id=correlation_id,
-            metadata=metadata,
         )
 
     def parse_message(
@@ -456,6 +490,8 @@ class KafkaListener:
         value: Any,
         *,
         headers: Optional[Sequence[tuple[str, Optional[bytes]]]] = None,
+        key: Any = None,
+        topic: Optional[str] = None,
         partition: Optional[int] = None,
         offset: Optional[int] = None,
     ) -> list[CommandEnvelope]:
@@ -476,6 +512,8 @@ class KafkaListener:
         )
 
         commands = self._normalize_commands(payload)
+        target_class = self._decode_message_key(key)
+        priority = self._priority_from_topic(topic)
 
         envelopes: list[CommandEnvelope] = []
 
@@ -487,11 +525,127 @@ class KafkaListener:
                 partition=partition,
                 offset=offset,
                 request_index=index,
+                target_class=target_class,
+                priority=priority,
             )
 
             envelopes.append(envelope)
 
         return envelopes
+
+    @staticmethod
+    def _decode_message_key(key: Any) -> Optional[str]:
+        """Return the legacy Kafka message key as the dispatcher target."""
+        if key is None:
+            return None
+
+        if isinstance(key, bytes):
+            key = key.decode("utf-8", errors="replace")
+
+        value = str(key).strip()
+        return value or None
+
+    @staticmethod
+    def _priority_from_topic(topic: Optional[str]) -> int:
+        """Map the documented ``cmd.<client_id>.pN`` suffix to priority."""
+        if not topic:
+            return 1
+
+        suffix = str(topic).rsplit(".p", 1)
+        if len(suffix) != 2:
+            return 1
+
+        try:
+            priority = int(suffix[1])
+        except ValueError:
+            return 1
+
+        return priority if priority in (0, 1, 2) else 1
+
+    def _register_pending_message(
+        self,
+        message: Any,
+        envelopes: Sequence[CommandEnvelope],
+    ) -> None:
+        """Retain a record until all commands produced from it are acked."""
+        command_ids = {envelope.command_id for envelope in envelopes}
+        if not command_ids:
+            return
+
+        pending = _PendingKafkaMessage(
+            message=message,
+            command_ids=command_ids,
+        )
+
+        with self._pending_lock:
+            self._pending_by_command_id.update(
+                {command_id: pending for command_id in command_ids}
+            )
+
+    def commit_command(self, command_id: str) -> bool:
+        """Commit a manually managed Kafka record after every child command is acked.
+
+        ``Consumer.commit(message=...)`` commits the next offset for the
+        record.  A single legacy Kafka record may contain a command list, so
+        committing after only one child command would lose unacknowledged
+        siblings on a process crash.  The record is therefore committed only
+        when every generated ``CommandEnvelope`` has been acknowledged.
+        """
+        if not command_id:
+            raise ValueError("command_id must not be empty")
+
+        consumer = self._consumer
+        if consumer is None:
+            raise RuntimeError("Kafka consumer is unavailable")
+
+        with self._pending_lock:
+            pending = self._pending_by_command_id.get(command_id)
+            if pending is None:
+                raise KeyError(
+                    "No pending Kafka record is registered for command_id="
+                    f"{command_id!r}"
+                )
+
+            pending.acknowledged_command_ids.add(command_id)
+            if not pending.is_fully_acknowledged:
+                return False
+
+            try:
+                consumer.commit(message=pending.message, asynchronous=False)
+            except Exception:
+                pending.acknowledged_command_ids.discard(command_id)
+                logger.exception(
+                    "Kafka manual commit failed for command_id=%s",
+                    command_id,
+                )
+                raise
+
+            for pending_command_id in pending.command_ids:
+                self._pending_by_command_id.pop(pending_command_id, None)
+
+        logger.debug("Kafka record committed for command_id=%s", command_id)
+        return True
+
+    def related_command_ids(self, command_id: str) -> set[str]:
+        """Return the command ids produced from the same pending record."""
+        with self._pending_lock:
+            pending = self._pending_by_command_id.get(command_id)
+            if pending is None:
+                raise KeyError(
+                    "No pending Kafka record is registered for command_id="
+                    f"{command_id!r}"
+                )
+            return set(pending.command_ids)
+
+    def release_pending_record(self, command_id: str) -> None:
+        """Discard a retained record when no application commit is needed."""
+        with self._pending_lock:
+            pending = self._pending_by_command_id.get(command_id)
+            if pending is None:
+                return
+
+            for pending_command_id in pending.command_ids:
+                self._pending_by_command_id.pop(pending_command_id, None)
 
     # ------------------------------------------------------------------
     # Polling
@@ -545,9 +699,13 @@ class KafkaListener:
             envelopes = self.parse_message(
                 message.value(),
                 headers=message.headers(),
+                key=message.key(),
+                topic=message.topic(),
                 partition=message.partition(),
                 offset=message.offset(),
             )
+
+            self._register_pending_message(message, envelopes)
 
             logger.debug(
                 "Kafka message normalized: topic=%s partition=%s offset=%s "

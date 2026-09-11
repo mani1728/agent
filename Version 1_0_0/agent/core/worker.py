@@ -27,6 +27,7 @@ Future phases will add:
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from typing import Any
@@ -34,6 +35,10 @@ from typing import Any
 from agent.contracts.command import CommandEnvelope
 from agent.contracts.response import ResponseEnvelope
 from agent.core.command_executor import CommandExecutor
+from agent.transport.base import ITransportClient
+
+
+logger = logging.getLogger(__name__)
 
 
 class WorkerError(Exception):
@@ -51,7 +56,7 @@ class WorkerState:
 
 class AgentWorker:
     """
-    Minimal transport-independent Agent Worker.
+    Transport-agnostic Agent Worker.
 
     Phase 1 lifecycle:
 
@@ -70,14 +75,19 @@ class AgentWorker:
            v
         STOPPED
 
-    The worker does not know whether commands originate from Kafka,
-    HTTP, or another transport.
+    Command flow is:
+
+        poll -> execute -> send_response -> ack_command
+
+    The worker knows only the ITransportClient interface, never Kafka or HTTP.
     """
 
     def __init__(
         self,
         command_executor: CommandExecutor,
+        transport: ITransportClient | None = None,
         *,
+        poll_timeout_sec: float = 1.0,
         on_start: Callable[[], None] | None = None,
         on_stop: Callable[[], None] | None = None,
     ) -> None:
@@ -86,7 +96,19 @@ class AgentWorker:
                 "command_executor must be a CommandExecutor instance."
             )
 
+        if transport is not None and not isinstance(transport, ITransportClient):
+            raise TypeError(
+                "transport must implement ITransportClient."
+            )
+
+        if poll_timeout_sec <= 0:
+            raise ValueError(
+                "poll_timeout_sec must be greater than zero."
+            )
+
         self._command_executor = command_executor
+        self._transport = transport
+        self._poll_timeout_sec = float(poll_timeout_sec)
 
         self._on_start = on_start
         self._on_stop = on_stop
@@ -105,6 +127,11 @@ class AgentWorker:
         """Return the configured command executor."""
 
         return self._command_executor
+
+    @property
+    def transport(self) -> ITransportClient | None:
+        """Return the configured transport, if the worker owns one."""
+        return self._transport
 
     @property
     def state(self) -> str:
@@ -149,8 +176,6 @@ class AgentWorker:
     def start(self) -> None:
         """
         Start the worker.
-
-        Phase 1 does not start a polling thread yet.
         """
 
         with self._state_lock:
@@ -169,17 +194,29 @@ class AgentWorker:
 
             self._stop_event.clear()
 
+        try:
+            if self._transport is not None:
+                self._transport.start()
+
             if self._on_start is not None:
                 self._on_start()
 
+        except Exception as exc:
+            self._stop_event.set()
+            raise WorkerError(
+                "Worker startup failed."
+            ) from exc
+
+        with self._state_lock:
             self._state = WorkerState.RUNNING
+
+        logger.info("Agent worker started")
 
     def stop(self) -> None:
         """
         Request worker shutdown.
 
-        The actual bounded graceful shutdown sequence will be introduced
-        by the lifecycle/reliability phases.
+        The final bounded multi-stage shutdown sequence remains a later phase.
         """
 
         with self._state_lock:
@@ -198,15 +235,52 @@ class AgentWorker:
             self._stop_event.set()
 
         try:
+            if self._transport is not None:
+                self._transport.stop()
+        except Exception:
+            logger.exception("Failed to stop worker transport")
+        try:
             if self._on_stop is not None:
                 self._on_stop()
+        except Exception:
+            logger.exception("Worker stop callback failed")
         finally:
             with self._state_lock:
                 self._state = WorkerState.STOPPED
 
+        logger.info("Agent worker stopped")
+
     # ------------------------------------------------------------------
     # Command execution
     # ------------------------------------------------------------------
+
+    def run_once(self) -> int:
+        """Poll once and process every command returned by that poll."""
+        if not self.is_running:
+            raise WorkerError("Worker is not running.")
+
+        if self._transport is None:
+            raise WorkerError("Worker has no transport configured.")
+
+        commands = self._transport.poll_commands(
+            timeout_sec=self._poll_timeout_sec,
+        )
+
+        for command in commands:
+            self._process_command(command)
+
+        return len(commands)
+
+    def run(self) -> None:
+        """Run the polling loop until a stop is requested."""
+        if not self.is_running:
+            self.start()
+
+        try:
+            while not self._stop_event.is_set():
+                self.run_once()
+        finally:
+            self.stop()
 
     def execute(
         self,
@@ -247,6 +321,60 @@ class AgentWorker:
         """
 
         return self.execute(command)
+
+    def _process_command(
+        self,
+        command: CommandEnvelope,
+    ) -> None:
+        """Execute, publish, then acknowledge one canonical command."""
+        if not isinstance(command, CommandEnvelope):
+            logger.error("Transport returned a non-CommandEnvelope command")
+            return
+
+        try:
+            response = self.execute(command)
+        except Exception:
+            logger.exception(
+                "Command execution escaped worker boundary: command_id=%s",
+                command.command_id,
+            )
+            response = ResponseEnvelope.error(
+                correlation_id=command.correlation_id,
+                error_code="WORKER_EXECUTION_ERROR",
+                error_message="Command execution failed.",
+                metadata={
+                    "target_class": command.target_class,
+                    "target_method": command.target_method,
+                },
+            )
+
+        try:
+            sent = bool(
+                self._transport
+                and self._transport.send_response(response)
+            )
+        except Exception:
+            logger.exception(
+                "Response publication failed: command_id=%s",
+                command.command_id,
+            )
+            return
+
+        if not sent:
+            logger.error(
+                "Response was not accepted by transport: command_id=%s",
+                command.command_id,
+            )
+            return
+
+        try:
+            if self._transport is not None:
+                self._transport.ack_command(command.command_id)
+        except Exception:
+            logger.exception(
+                "Command acknowledgement failed: command_id=%s",
+                command.command_id,
+            )
 
     # ------------------------------------------------------------------
     # Lifecycle helpers

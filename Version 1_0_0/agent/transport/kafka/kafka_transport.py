@@ -12,6 +12,11 @@ from agent.transport.base import ITransportClient
 
 from .listener import KafkaListener
 from .responder import KafkaResponder
+from .commit_policy import (
+    CommandCommitTracker,
+    CommitPolicy,
+    KafkaCommitPolicy,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -56,6 +61,19 @@ class KafkaTransport(ITransportClient):
         self.responder = KafkaResponder(
             config=config,
         )
+
+        effective_config = config or self.listener.config
+        self._commit_policy = KafkaCommitPolicy.from_config(effective_config)
+        if (
+            self._commit_policy.is_application_managed
+            and bool(self._get_config_value("kafka.enable_auto_commit", True))
+        ):
+            logger.warning(
+                "Ignoring application-managed kafka.commit_policy while "
+                "kafka.enable_auto_commit=true"
+            )
+            self._commit_policy = KafkaCommitPolicy(CommitPolicy.AUTO)
+        self._commit_trackers: dict[str, CommandCommitTracker] = {}
 
         self._started = False
 
@@ -154,9 +172,22 @@ class KafkaTransport(ITransportClient):
         if not self._started:
             self.start()
 
-        return self.listener.poll_commands(
+        commands = self.listener.poll_commands(
             timeout_sec=timeout_sec,
         )
+
+        if self._commit_policy.is_application_managed:
+            for command in commands:
+                self._commit_trackers[command.command_id] = CommandCommitTracker(
+                    command.command_id
+                )
+        else:
+            # AUTO/DISABLED have no application-side offset commit.  Do not
+            # retain raw Kafka Message objects merely for diagnostics.
+            for command in commands:
+                self.listener.release_pending_record(command.command_id)
+
+        return commands
 
     # ------------------------------------------------------------------
     # Responses
@@ -291,27 +322,10 @@ class KafkaTransport(ITransportClient):
         """
         Acknowledge command consumption.
 
-        IMPORTANT:
-        Phase 1 deliberately does not change Kafka offset semantics.
-
-        The legacy configuration currently uses:
-            enable.auto.commit = true
-
-        Therefore there is no durable/manual commit implementation here.
-
-        A real acknowledgement policy must later map:
-
-            consumed
-                ↓
-            execution started
-                ↓
-            execution finished
-                ↓
-            response published
-                ↓
-            Kafka offset committed
-
-        against crash/restart behavior before changing auto-commit.
+        The caller must invoke this only after the corresponding response has
+        been accepted for publication (or, in a later phase, durably spooled).
+        AUTO remains the compatibility default and deliberately performs no
+        application-side commit.
         """
 
         if not command_id:
@@ -319,12 +333,46 @@ class KafkaTransport(ITransportClient):
                 "command_id must not be empty"
             )
 
-        logger.debug(
-            "Kafka command acknowledgement requested: command_id=%s",
-            command_id,
-        )
+        if not self._commit_policy.is_application_managed:
+            logger.debug(
+                "Kafka acknowledgement delegated to auto-commit: command_id=%s",
+                command_id,
+            )
+            return
 
-        # Intentionally no manual Kafka commit in Phase 1.
+        tracker = self._commit_trackers.get(command_id)
+        if tracker is None:
+            raise KeyError(
+                "No Kafka commit tracker is registered for command_id="
+                f"{command_id!r}"
+            )
+
+        tracker.mark_response_sent()
+        decision = self._commit_policy.evaluate(tracker)
+
+        if not decision:
+            logger.debug(
+                "Kafka acknowledgement not committed: command_id=%s reason=%s",
+                command_id,
+                decision.reason,
+            )
+            return
+
+        related_command_ids = self.listener.related_command_ids(command_id)
+        committed = self.listener.commit_command(command_id)
+        if not committed:
+            # A batched legacy Kafka record has other commands whose responses
+            # are not published yet.  Keep this tracker at RESPONSE_SENT until
+            # the final sibling advances the record's offset.
+            return
+
+        for tracked_command_id in related_command_ids:
+            tracked_tracker = self._commit_trackers.pop(
+                tracked_command_id,
+                None,
+            )
+            if tracked_tracker is not None:
+                tracked_tracker.mark_acked()
 
     # ------------------------------------------------------------------
     # Helpers
