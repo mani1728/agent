@@ -1,0 +1,233 @@
+# ============================================================================
+# Agent Requirements
+# ============================================================================
+#
+# Migration strategy:
+#   Phase 1  -> Contracts / Transport Interface Foundation
+#   Phase 2  -> Core / Dispatcher / Command Execution Separation
+#   Phase 3  -> Legacy Kafka Transport Integration & Semantics
+#   Phase 4  -> Persistence / SQLite Spooler
+#   Phase 5  -> Gateway HTTP/mTLS Transport
+#   Phase 6  -> Reliability / Retry / Circuit Breaker / Idempotency
+#   Phase 7  -> Security / Health / Observability
+#   Phase 8  -> Windows Service / Deployment
+#
+# Important:
+#   Dependencies are grouped by the migration phase in which they are
+#   actually required. Existing Legacy dependencies remain available until
+#   the corresponding migration phase proves that they can be removed.
+#
+# Do NOT add a dependency merely because a future target-architecture
+# component exists. Add it when the corresponding phase actually requires it.
+# ============================================================================
+
+
+# ============================================================================
+# PHASE 1 — Contracts & Transport Interface Foundation
+# ============================================================================
+#
+# Phase 1 intentionally uses the Python standard library wherever possible.
+#
+# Current Phase 1 modules:
+#   - agent/contracts/
+#   - agent/transport/models.py
+#   - agent/transport/base.py
+#
+# No third-party dependency is required specifically by Phase 1 contracts.
+#
+# Standard-library modules currently used by Phase 1 include:
+#   - abc
+#   - dataclasses
+#   - datetime
+#   - enum
+#   - json
+#   - typing
+#   - uuid
+#
+# Therefore:
+#   Phase 1 adds NO new external package.
+#
+# ============================================================================
+
+
+# ============================================================================
+# EXISTING LEGACY — Kafka Transport
+# ============================================================================
+#
+# Required by the existing Kafka Agent implementation.
+#
+# Used by:
+#   - Legacy Kafka listener
+#   - Kafka producer/responder
+#   - Client registration / heartbeat
+#   - Existing Kafka transport implementation
+#
+# Migration note:
+#   Keep until Phase 3 has fully validated Kafka behavior and the resulting
+#   transport implementation.
+#
+confluent-kafka>=2.3
+
+
+# ============================================================================
+# EXISTING LEGACY — MetaTrader 5
+# ============================================================================
+#
+# Required by the existing MT5 business/runtime layer.
+#
+# Used by:
+#   - meta_trader_manager.py
+#   - MT5 connection/login
+#   - symbols
+#   - market data
+#   - positions
+#   - history
+#   - trading operations
+#
+# Migration note:
+#   This dependency is expected to remain throughout the migration because
+#   MT5 behavior is core business behavior and must not regress.
+#
+MetaTrader5>=5.0
+
+
+# ============================================================================
+# EXISTING LEGACY — Data Processing
+# ============================================================================
+#
+# Used by existing MT5 serialization/data-processing utilities.
+#
+# Migration note:
+#   Keep while the current MT5 utility layer still depends on pandas.
+#   Removal should only happen after static/runtime verification proves that
+#   no production path requires it.
+#
+pandas>=1.5
+
+
+# ============================================================================
+# EXISTING LEGACY — Timezone Support
+# ============================================================================
+#
+# Used by the existing MT5/configuration/runtime code.
+#
+# Migration note:
+#   Keep during migration until timezone handling has been audited and the
+#   existing pytz usage has either been retained intentionally or replaced
+#   safely.
+#
+pytz>=2023.3
+
+
+# ============================================================================
+# PHASE 5 — Gateway HTTP Transport
+# ============================================================================
+#
+# HTTP client dependency.
+#
+# Target responsibilities:
+#   - HTTPS communication
+#   - connection/read timeouts
+#   - TLS certificate validation
+#   - mTLS support
+#   - connection pooling
+#   - explicit HTTP status handling
+#
+# IMPORTANT:
+#   This dependency is NOT required by the Phase 1 contract/interface layer.
+#   It remains here only because the existing repository may already contain
+#   Gateway/HTTP code using requests.
+#
+# Before Phase 5 is completed, usage of this dependency must be audited.
+# If the final Gateway implementation uses another HTTP client, this package
+# can be removed only after all imports/usages have been migrated and tested.
+#
+requests>=2.31
+
+
+# ============================================================================
+# PHASE 6 — Reliability
+# ============================================================================
+#
+# Expected initial implementation:
+#   Python standard library only.
+#
+# Target capabilities:
+#   - retry
+#   - exponential backoff
+#   - jitter
+#   - circuit breaker
+#   - idempotency
+#   - deduplication
+#   - bounded queues
+#   - retry-storm protection
+#
+# No third-party dependency is intentionally added at this stage.
+#
+# ============================================================================
+
+
+# ============================================================================
+# PHASE 7 — Security / Health / Observability
+# ============================================================================
+#
+# Expected initial implementation:
+#   Python standard library + dependencies already required by the selected
+#   transport/runtime.
+#
+# Target capabilities:
+#   - certificate management
+#   - client authentication
+#   - secret provider
+#   - command authorization
+#   - redaction
+#   - health checks
+#   - readiness
+#   - metrics
+#
+# Additional dependencies must be introduced only after the actual
+# implementation strategy is selected.
+#
+# No speculative dependency is added here.
+#
+# ============================================================================
+
+
+# ============================================================================
+# PHASE 8 — Windows Service / Deployment
+# ============================================================================
+#
+# Windows Service implementation will use pywin32 / ServiceFramework.
+#
+# Dependency to be added when Phase 8 implementation starts:
+#
+# pywin32
+#
+# It is intentionally NOT enabled yet because Phase 8 is not part of the
+# current migration step.
+#
+# ============================================================================
+
+
+# ============================================================================
+# FUTURE / CONDITIONAL DEPENDENCIES
+# ============================================================================
+#
+# The following are intentionally NOT added at this stage:
+#
+#   redis
+#   sqlalchemy
+#   psycopg
+#   asyncpg
+#   cryptography
+#   prometheus-client
+#   tenacity
+#   httpx
+#   pywin32
+#
+# Reason:
+#   The Master Prompt explicitly requires avoiding speculative dependencies.
+#   Each dependency must be justified by an implemented phase and an actual
+#   consumer.
+#
+# ============================================================================
