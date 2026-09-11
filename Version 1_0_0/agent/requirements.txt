@@ -1,3 +1,5 @@
+# Path: Version 1_0_0/agent/requirements.txt
+
 # ============================================================================
 # Agent Requirements
 # ============================================================================
@@ -32,20 +34,31 @@
 #   - agent/contracts/
 #   - agent/transport/models.py
 #   - agent/transport/base.py
+#   - agent/security/certificate_manager.py
+#   - agent/security/redaction.py
+#   - agent/security/secret_provider.py
+#   - agent/reliability/
 #
-# No third-party dependency is required specifically by Phase 1 contracts.
-#
-# Standard-library modules currently used by Phase 1 include:
+# Standard-library modules used include:
 #   - abc
 #   - dataclasses
 #   - datetime
 #   - enum
+#   - hashlib
+#   - hmac
 #   - json
+#   - logging
+#   - pathlib
+#   - ssl
+#   - sqlite3
+#   - threading
+#   - time
 #   - typing
 #   - uuid
 #
 # Therefore:
-#   Phase 1 adds NO new external package.
+#   No new third-party dependency is required specifically by the
+#   contracts, reliability, or basic security utility implementations.
 #
 # ============================================================================
 
@@ -59,8 +72,9 @@
 # Used by:
 #   - Legacy Kafka listener
 #   - Kafka producer/responder
-#   - Client registration / heartbeat
-#   - Existing Kafka transport implementation
+#   - Kafka serializer/transport
+#   - Client registration
+#   - Client heartbeat/status publishing
 #
 # Migration note:
 #   Keep until Phase 3 has fully validated Kafka behavior and the resulting
@@ -95,7 +109,10 @@ MetaTrader5>=5.0
 # EXISTING LEGACY — Data Processing
 # ============================================================================
 #
-# Used by existing MT5 serialization/data-processing utilities.
+# Used by:
+#   - meta_trader_manager.py
+#   - mt5_utils.py
+#   - MT5 dataframe/rates/ticks/history processing
 #
 # Migration note:
 #   Keep while the current MT5 utility layer still depends on pandas.
@@ -125,6 +142,10 @@ pytz>=2023.3
 #
 # HTTP client dependency.
 #
+# Used by:
+#   - agent/transport/gateway/http_client.py
+#   - agent/transport/gateway/gateway_adapter.py
+#
 # Target responsibilities:
 #   - HTTPS communication
 #   - connection/read timeouts
@@ -133,14 +154,14 @@ pytz>=2023.3
 #   - connection pooling
 #   - explicit HTTP status handling
 #
-# IMPORTANT:
-#   This dependency is NOT required by the Phase 1 contract/interface layer.
-#   It remains here only because the existing repository may already contain
-#   Gateway/HTTP code using requests.
+# Security note:
+#   TLS verification must remain enabled.
+#   No implementation should use verify=False.
 #
-# Before Phase 5 is completed, usage of this dependency must be audited.
-# If the final Gateway implementation uses another HTTP client, this package
-# can be removed only after all imports/usages have been migrated and tested.
+# Migration note:
+#   Keep while the Gateway transport uses requests.
+#   It may only be removed after all Gateway HTTP usage has been migrated
+#   and verified.
 #
 requests>=2.31
 
@@ -149,20 +170,26 @@ requests>=2.31
 # PHASE 6 — Reliability
 # ============================================================================
 #
-# Expected initial implementation:
-#   Python standard library only.
+# Current implementation uses Python standard library only.
 #
-# Target capabilities:
+# Implemented capabilities:
 #   - retry
 #   - exponential backoff
 #   - jitter
 #   - circuit breaker
 #   - idempotency
-#   - deduplication
-#   - bounded queues
-#   - retry-storm protection
+#   - bounded/concurrency-safe state handling
 #
-# No third-party dependency is intentionally added at this stage.
+# Current modules:
+#   - agent/reliability/backoff.py
+#   - agent/reliability/retry.py
+#   - agent/reliability/circuit_breaker.py
+#   - agent/reliability/idempotency.py
+#
+# No third-party dependency is currently required.
+#
+# Do NOT add tenacity or another retry framework unless the implementation
+# is intentionally migrated to it and the existing behavior is revalidated.
 #
 # ============================================================================
 
@@ -171,24 +198,53 @@ requests>=2.31
 # PHASE 7 — Security / Health / Observability
 # ============================================================================
 #
-# Expected initial implementation:
-#   Python standard library + dependencies already required by the selected
-#   transport/runtime.
+# Current security implementation uses Python standard library.
 #
-# Target capabilities:
-#   - certificate management
-#   - client authentication
-#   - secret provider
+# Implemented:
+#   - certificate configuration/validation
+#   - TLS SSLContext creation
+#   - client authentication compatibility layer
 #   - command authorization
-#   - redaction
-#   - health checks
-#   - readiness
-#   - metrics
+#   - secret provider abstraction
+#   - environment/mapping/chained secret providers
+#   - sensitive-data redaction
 #
-# Additional dependencies must be introduced only after the actual
-# implementation strategy is selected.
+# Current modules:
+#   - agent/security/certificate_manager.py
+#   - agent/security/client_auth.py
+#   - agent/security/command_authorizer.py
+#   - agent/security/redaction.py
+#   - agent/security/secret_provider.py
 #
-# No speculative dependency is added here.
+# No additional third-party security dependency is currently required.
+#
+# In particular:
+#   cryptography is NOT required by the current implementation because
+#   certificate handling uses Python's standard-library ssl module.
+#
+# ============================================================================
+
+
+# ============================================================================
+# PHASE 4 — Persistence / SQLite
+# ============================================================================
+#
+# SQLite support is provided by Python's standard library:
+#
+#   sqlite3
+#
+# Current persistence modules:
+#   - agent/persistence/migrations.py
+#   - agent/persistence/models.py
+#   - agent/persistence/spool_repository.py
+#   - agent/persistence/spooler.py
+#   - agent/persistence/sqlite_spooler.py
+#
+# Therefore:
+#   No SQLAlchemy or PostgreSQL driver is currently required.
+#
+# Future database dependencies must not be added until the architecture
+# explicitly requires a different persistence backend.
 #
 # ============================================================================
 
@@ -197,14 +253,40 @@ requests>=2.31
 # PHASE 8 — Windows Service / Deployment
 # ============================================================================
 #
-# Windows Service implementation will use pywin32 / ServiceFramework.
+# REQUIRED BY CURRENT IMPLEMENTATION
 #
-# Dependency to be added when Phase 8 implementation starts:
+# service_host.py currently uses:
+#   - win32event
+#   - win32service
+#   - win32serviceutil
 #
-# pywin32
+# These modules are provided by pywin32.
 #
-# It is intentionally NOT enabled yet because Phase 8 is not part of the
-# current migration step.
+# Unlike earlier versions of this file, pywin32 is now an active dependency
+# because agent/service_host.py has been implemented.
+#
+# Note:
+#   pywin32 is a Windows-specific dependency.
+#   The application can still be imported on non-Windows environments
+#   because service_host.py contains a guarded import/fallback.
+#
+pywin32>=306
+
+
+# ============================================================================
+# DEVELOPMENT / TESTING
+# ============================================================================
+#
+# No testing framework is added yet.
+#
+# When the test suite is actually introduced, add the selected framework
+# here only when there is a real consumer under agent/tests/.
+#
+# Example for a future phase:
+#
+# pytest>=8.0
+#
+# Do NOT uncomment speculative test dependencies before they are required.
 #
 # ============================================================================
 
@@ -213,7 +295,7 @@ requests>=2.31
 # FUTURE / CONDITIONAL DEPENDENCIES
 # ============================================================================
 #
-# The following are intentionally NOT added at this stage:
+# The following are intentionally NOT included:
 #
 #   redis
 #   sqlalchemy
@@ -223,11 +305,41 @@ requests>=2.31
 #   prometheus-client
 #   tenacity
 #   httpx
-#   pywin32
 #
-# Reason:
-#   The Master Prompt explicitly requires avoiding speculative dependencies.
-#   Each dependency must be justified by an implemented phase and an actual
-#   consumer.
+# Reasons:
+#
+#   redis
+#       No Redis implementation currently exists.
+#
+#   sqlalchemy
+#       Persistence currently uses sqlite3 directly.
+#
+#   psycopg / asyncpg
+#       PostgreSQL is not currently part of the implemented persistence layer.
+#
+#   cryptography
+#       Current certificate/TLS implementation uses the standard-library
+#       ssl module.
+#
+#   prometheus-client
+#       No Prometheus metrics implementation currently consumes it.
+#
+#   tenacity
+#       Retry/backoff is implemented with the Python standard library.
+#
+#   httpx
+#       Gateway implementation currently uses requests.
+#
+# ============================================================================
+#
+# Dependency policy:
+#
+#   1. Every external dependency must have an actual consumer.
+#   2. Do not add dependencies for planned architecture only.
+#   3. Prefer Python standard library when it satisfies the requirement.
+#   4. Keep legacy dependencies until their replacement is verified.
+#   5. Remove dependencies only after static and runtime verification.
+#   6. Security-related dependencies must be justified by the actual
+#      implementation rather than by theoretical future requirements.
 #
 # ============================================================================
