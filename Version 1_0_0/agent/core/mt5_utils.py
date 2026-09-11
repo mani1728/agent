@@ -18,6 +18,12 @@ mt5_utils.py
 - parse_iso_dt همیشه datetime در UTC برمی‌گرداند.
 - MetaTrader5 وابستگی اختیاری است تا ماژول در محیط‌هایی که MT5 نصب نیست
   بتواند برای تست/پردازش اولیه import شود.
+
+نکته Migration:
+- parse_iso_dt عمداً UTC را برمی‌گرداند.
+- این تابع نباید در این مرحله جایگزین _parse_iso_dt موجود در
+  meta_trader_manager.py شود؛ زیرا Manager فعلاً رفتار legacy مربوط
+  به timezone پیکربندی‌شده را حفظ می‌کند.
 """
 
 from __future__ import annotations
@@ -26,7 +32,16 @@ import datetime as dt
 import json
 from typing import Any, Dict
 
-from config_manager import cfg
+
+# ----------------------------------------------------------------------
+# Config compatibility import
+# ----------------------------------------------------------------------
+
+try:
+    from agent.infrastructure.config_manager import cfg
+except ImportError:
+    # Legacy flat-file execution compatibility.
+    from config_manager import cfg
 
 
 # ----------------------------------------------------------------------
@@ -115,7 +130,6 @@ def parse_iso_dt(s: str) -> dt.datetime:
     if not value:
         raise ValueError("datetime must not be empty")
 
-    # Convert ISO-8601 Z suffix to explicit UTC offset.
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
 
@@ -126,14 +140,12 @@ def parse_iso_dt(s: str) -> dt.datetime:
             value.replace(" ", "T")
         )
 
-    # Naive datetime => UTC.
     if obj.tzinfo is None:
         if _HAS_PYTZ:
             obj = _get_utc_tz().localize(obj)
         else:
             obj = obj.replace(tzinfo=_get_utc_tz())
 
-    # Normalize everything to UTC.
     return obj.astimezone(_get_utc_tz())
 
 
@@ -144,13 +156,6 @@ def parse_iso_dt(s: str) -> dt.datetime:
 def to_mt5_const(name: str, default: Any) -> Any:
     """
     Safely resolve a string name to an MT5 constant.
-
-    Example:
-
-        to_mt5_const(
-            "TIMEFRAME_H4",
-            mt5.TIMEFRAME_H1
-        )
 
     If MT5 is unavailable or the constant does not exist,
     default is returned.
@@ -173,7 +178,6 @@ def convert_request_fields(req: Dict[str, Any]) -> None:
     Convert string values inside a trading request to MT5 constants.
 
     Supported fields:
-
         action
         type
         type_time
@@ -183,10 +187,6 @@ def convert_request_fields(req: Dict[str, Any]) -> None:
     """
     if not isinstance(req, dict):
         return
-
-    # --------------------------------------------------------------
-    # action
-    # --------------------------------------------------------------
 
     if "action" in req and isinstance(req["action"], str):
         default = (
@@ -200,10 +200,6 @@ def convert_request_fields(req: Dict[str, Any]) -> None:
             default,
         )
 
-    # --------------------------------------------------------------
-    # order type
-    # --------------------------------------------------------------
-
     if "type" in req and isinstance(req["type"], str):
         default = (
             mt5.ORDER_TYPE_BUY
@@ -216,10 +212,6 @@ def convert_request_fields(req: Dict[str, Any]) -> None:
             default,
         )
 
-    # --------------------------------------------------------------
-    # time type
-    # --------------------------------------------------------------
-
     if "type_time" in req and isinstance(req["type_time"], str):
         default = (
             mt5.ORDER_TIME_GTC
@@ -231,10 +223,6 @@ def convert_request_fields(req: Dict[str, Any]) -> None:
             req["type_time"],
             default,
         )
-
-    # --------------------------------------------------------------
-    # filling type
-    # --------------------------------------------------------------
 
     if "type_filling" in req and isinstance(
         req["type_filling"],
@@ -261,7 +249,6 @@ def convert_params(params: Dict[str, Any]) -> Dict[str, Any]:
     Convert high-level command parameters.
 
     Supported conversions:
-
         timeframe
         flags
         order_type
@@ -271,19 +258,11 @@ def convert_params(params: Dict[str, Any]) -> Dict[str, Any]:
         request.*
 
     The input dictionary is never modified directly.
-
-    Returns:
-        A converted copy of params.
     """
     if not isinstance(params, dict):
         raise ValueError("params must be a dictionary")
 
-    # Shallow copy first.
     out = dict(params)
-
-    # --------------------------------------------------------------
-    # timeframe
-    # --------------------------------------------------------------
 
     if "timeframe" in out and isinstance(
         out["timeframe"],
@@ -300,10 +279,6 @@ def convert_params(params: Dict[str, Any]) -> Dict[str, Any]:
             default,
         )
 
-    # --------------------------------------------------------------
-    # tick flags
-    # --------------------------------------------------------------
-
     if "flags" in out and isinstance(
         out["flags"],
         str,
@@ -318,10 +293,6 @@ def convert_params(params: Dict[str, Any]) -> Dict[str, Any]:
             out["flags"],
             default,
         )
-
-    # --------------------------------------------------------------
-    # order type
-    # --------------------------------------------------------------
 
     if "order_type" in out and isinstance(
         out["order_type"],
@@ -338,19 +309,11 @@ def convert_params(params: Dict[str, Any]) -> Dict[str, Any]:
             default,
         )
 
-    # --------------------------------------------------------------
-    # application-level action
-    # --------------------------------------------------------------
-
     if "action" in out and isinstance(
         out["action"],
         str,
     ):
         out["action"] = out["action"].lower()
-
-    # --------------------------------------------------------------
-    # date_from
-    # --------------------------------------------------------------
 
     if "date_from" in out and isinstance(
         out["date_from"],
@@ -360,10 +323,6 @@ def convert_params(params: Dict[str, Any]) -> Dict[str, Any]:
             out["date_from"]
         )
 
-    # --------------------------------------------------------------
-    # date_to
-    # --------------------------------------------------------------
-
     if "date_to" in out and isinstance(
         out["date_to"],
         str,
@@ -372,12 +331,7 @@ def convert_params(params: Dict[str, Any]) -> Dict[str, Any]:
             out["date_to"]
         )
 
-    # --------------------------------------------------------------
-    # nested trading request
-    # --------------------------------------------------------------
-
     if isinstance(out.get("request"), dict):
-        # Make nested request independent from caller's dictionary.
         out["request"] = dict(out["request"])
 
         convert_request_fields(
@@ -400,7 +354,6 @@ def safe_serialize(
     Safely convert an object into JSON-compatible data.
 
     Supported:
-
         datetime
         date
         time
@@ -416,16 +369,8 @@ def safe_serialize(
     deeply nested structures.
     """
 
-    # --------------------------------------------------------------
-    # recursion guard
-    # --------------------------------------------------------------
-
     if _depth > _limit:
         return str(obj)
-
-    # --------------------------------------------------------------
-    # datetime / date / time
-    # --------------------------------------------------------------
 
     if isinstance(
         obj,
@@ -440,10 +385,6 @@ def safe_serialize(
         except Exception:
             return str(obj)
 
-    # --------------------------------------------------------------
-    # namedtuple
-    # --------------------------------------------------------------
-
     if hasattr(obj, "_asdict"):
         try:
             return {
@@ -457,10 +398,6 @@ def safe_serialize(
         except Exception:
             return str(obj)
 
-    # --------------------------------------------------------------
-    # dictionary
-    # --------------------------------------------------------------
-
     if isinstance(obj, dict):
         return {
             str(key): safe_serialize(
@@ -470,10 +407,6 @@ def safe_serialize(
             )
             for key, value in obj.items()
         }
-
-    # --------------------------------------------------------------
-    # list / tuple
-    # --------------------------------------------------------------
 
     if isinstance(obj, (list, tuple)):
         return [
@@ -485,10 +418,6 @@ def safe_serialize(
             for value in obj
         ]
 
-    # --------------------------------------------------------------
-    # numpy scalar
-    # --------------------------------------------------------------
-
     try:
         import numpy as np  # type: ignore
 
@@ -497,10 +426,6 @@ def safe_serialize(
 
     except Exception:
         pass
-
-    # --------------------------------------------------------------
-    # pandas structures
-    # --------------------------------------------------------------
 
     try:
         import pandas as pd  # type: ignore
@@ -533,13 +458,18 @@ def safe_serialize(
     except Exception:
         pass
 
-    # --------------------------------------------------------------
-    # already JSON serializable
-    # --------------------------------------------------------------
-
     try:
         json.dumps(obj)
         return obj
 
     except Exception:
         return str(obj)
+
+
+__all__ = [
+    "parse_iso_dt",
+    "to_mt5_const",
+    "convert_request_fields",
+    "convert_params",
+    "safe_serialize",
+]
