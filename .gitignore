@@ -1,12 +1,28 @@
-.idea/*
-test.py
-sender.py
-sender_all_tests.py
-meta_trader_manager_916.py
-__pycache__/*
-/logs
-test_code.py
-/markdown-cheat-sheet.md
-agent_identity.json
-./agent-main.zip
-./Version 1_0_0/agent/logs/app.log
+# همه چیز در ریشه ریپو ignore شود
+/*
+!.gitignore
+!Version 1_0_0/
+!Version 1_0_0/**
+
+# فایل‌های پایتون که نباید push بشن
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# لاگ‌ها
+Version 1_0_0/agent/logs/app.log
+*.log
+
+# تنظیمات ادیتور و آبسیدین
+.obsidian/
+.idea/
+.vscode/
+
+# فایل‌های موقت
+*.bak
+*.saved.bak

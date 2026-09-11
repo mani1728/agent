@@ -1,8 +1,0 @@
-main.py
- ├── config_manager.py
- ├── config_logging.py
- ├── kafka_listener.py
- ├── kafka_responder.py
- ├── meta_trader_manager.py
- ├── mt5_utils.py
- └── priority_executor.py
