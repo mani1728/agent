@@ -1,5 +1,9 @@
 # Path: Version 1_0_0/agent/core/worker.py
+
+# -*- coding: utf-8 -*-
 """
+worker.py
+---------
 Agent worker lifecycle.
 
 Phase 1 responsibility:
@@ -230,24 +234,19 @@ class AgentWorker:
     def execute_raw(
         self,
         command: CommandEnvelope,
-    ) -> Any:
+    ) -> ResponseEnvelope:
         """
-        Execute a command and return the raw target result.
+        Compatibility execution entry point.
 
-        This is intended for internal callers and tests.
+        In the Phase 1 architecture, CommandExecutor returns the canonical
+        ResponseEnvelope. Therefore this method delegates to execute()
+        rather than attempting to bypass the response boundary.
+
+        The name is retained temporarily for compatibility with callers
+        that may already reference execute_raw().
         """
 
-        if not isinstance(command, CommandEnvelope):
-            raise TypeError(
-                "execute_raw() expects a CommandEnvelope instance."
-            )
-
-        if not self.is_running:
-            raise WorkerError(
-                "Worker is not running."
-            )
-
-        return self._command_executor.execute_or_raise(command)
+        return self.execute(command)
 
     # ------------------------------------------------------------------
     # Lifecycle helpers

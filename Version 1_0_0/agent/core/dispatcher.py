@@ -1,358 +1,341 @@
 # Path: Version 1_0_0/agent/core/dispatcher.py
+
+# -*- coding: utf-8 -*-
 """
-Command dispatcher.
+dispatcher.py
+-------------
+Core command dispatcher.
 
-Phase 1 responsibility:
-- Resolve a command target from an explicit allowlist/registry.
-- Dispatch a CommandEnvelope to a registered target.
-- Keep transport-independent.
-- Avoid dynamic arbitrary getattr-based dispatch.
-- Avoid importing Kafka, HTTP, MetaTrader5, or concrete transports.
+مسئولیت:
+- دریافت CommandEnvelope
+- اعتبارسنجی target_class / target_method
+- Dispatch امن به handler مجاز
+- حفظ رفتار legacy مربوط به Mt5_Manager
 
-This module intentionally does NOT:
-- consume Kafka messages
-- send responses
-- execute MT5 operations directly
-- perform authorization
-- implement retries
-- manage persistence
-- manage worker lifecycle
+این فایل عمداً:
+- هیچ وابستگی به Kafka ندارد
+- هیچ وابستگی به HTTP ندارد
+- Transport را نمی‌شناسد
+- Persistence / Retry / Circuit Breaker را پیاده‌سازی نمی‌کند
+- از getattr پویا بر اساس ورودی command برای دسترسی مستقیم استفاده نمی‌کند
 
-Those responsibilities belong to later layers/phases.
+اصل migration:
+    Preserve behavior first, improve architecture second.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from typing import Any
+import logging
+import time
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from agent.contracts.command import CommandEnvelope
+from agent.contracts.response import ResponseEnvelope, ResponseStatus
+
+from .meta_trader_manager import Mt5_Manager
 
 
-class DispatcherError(Exception):
-    """Base exception for dispatcher-related failures."""
+logger = logging.getLogger(__name__)
 
 
-class TargetNotRegisteredError(DispatcherError):
-    """Raised when a command target class is not registered."""
+class DispatchError(Exception):
+    """Base exception for dispatcher failures."""
 
 
-class MethodNotAllowedError(DispatcherError):
-    """Raised when a target method is not explicitly allowed."""
+class UnknownTargetError(DispatchError):
+    """Raised when the requested target class is not allowed."""
 
 
-class InvalidTargetError(DispatcherError):
-    """Raised when a registered target is invalid."""
+class UnknownMethodError(DispatchError):
+    """Raised when the requested method is not allowed."""
 
 
-@dataclass(frozen=True)
-class DispatchTarget:
+class Dispatcher:
     """
-    Registered dispatch target.
+    Safe allowlist-based command dispatcher.
 
-    A target consists of:
-    - a target object
-    - an explicit set of allowed methods
+    Legacy behavior:
+        target_class == "Mt5_Manager"
+            -> Mt5_Manager instance
 
-    The dispatcher never executes arbitrary attributes on the object.
+    برخلاف implementation قدیمی، نام متد مستقیماً از ورودی
+    به getattr() داده نمی‌شود؛ ابتدا باید در allowlist قرار داشته باشد.
     """
 
-    name: str
-    target: Any
-    allowed_methods: frozenset[str]
+    DEFAULT_ALLOWED_METHODS = frozenset(
+        {
+            # Connection
+            "manage_connection",
 
-    def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not self.name.strip():
-            raise ValueError("Dispatch target name must be a non-empty string.")
+            # Symbols
+            "manage_symbols",
 
-        if self.target is None:
-            raise ValueError("Dispatch target object cannot be None.")
+            # Market book
+            "manage_market_book",
 
-        if not self.allowed_methods:
-            raise ValueError(
-                f"Dispatch target '{self.name}' must expose at least one "
-                "allowed method."
-            )
+            # Market data
+            "fetch_data",
 
+            # Trading
+            "trade_manager",
 
-class CommandDispatcher:
-    """
-    Transport-independent command dispatcher.
-
-    The dispatcher maps:
-
-        CommandEnvelope.target_class
-                    +
-        CommandEnvelope.target_method
-                    ↓
-        registered target object / method
-
-    Example:
-
-        dispatcher.register(
-            "Mt5_Manager",
-            mt5_manager,
-            allowed_methods={
-                "manage_connection",
-                "manage_symbols",
-                "fetch_data",
-                "trade_manager",
-            },
-        )
-
-        result = dispatcher.dispatch(command)
-
-    The registry is intentionally explicit. This prevents the legacy
-    arbitrary hasattr/getattr dispatch behavior from becoming an
-    accidental remote method execution mechanism.
-    """
+            # Positions / history
+            "manage_positions_history",
+        }
+    )
 
     def __init__(
         self,
-        targets: Mapping[str, DispatchTarget] | None = None,
+        mt5_manager: Optional[Mt5_Manager] = None,
+        allowed_methods: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        self._targets: dict[str, DispatchTarget] = {}
+        """
+        Args:
+            mt5_manager:
+                Existing Mt5_Manager instance.
+                اگر داده نشود، Dispatcher خودش یک instance می‌سازد.
 
-        if targets:
-            for name, target in targets.items():
-                self.register_target(
-                    name=name,
-                    target=target.target,
-                    allowed_methods=target.allowed_methods,
-                )
+            allowed_methods:
+                Optional per-target method allowlist.
+
+                Example:
+                    {
+                        "Mt5_Manager": {
+                            "manage_connection",
+                            "manage_symbols",
+                        }
+                    }
+
+                اگر None باشد، DEFAULT_ALLOWED_METHODS استفاده می‌شود.
+        """
+
+        self._mt5_manager = mt5_manager or Mt5_Manager()
+
+        self._handlers: Dict[str, Any] = {
+            "Mt5_Manager": self._mt5_manager,
+        }
+
+        if allowed_methods is None:
+            self._allowed_methods: Dict[str, frozenset[str]] = {
+                "Mt5_Manager": self.DEFAULT_ALLOWED_METHODS
+            }
+        else:
+            self._allowed_methods = {
+                str(target): frozenset(str(method) for method in methods)
+                for target, methods in allowed_methods.items()
+            }
 
     # ------------------------------------------------------------------
-    # Registration
+    # Public API
     # ------------------------------------------------------------------
 
-    def register_target(
+    def dispatch(
         self,
-        name: str,
-        target: Any,
-        allowed_methods: set[str] | frozenset[str] | list[str] | tuple[str, ...],
-    ) -> None:
+        command: CommandEnvelope,
+    ) -> ResponseEnvelope:
         """
-        Register or replace a dispatch target.
+        Execute one CommandEnvelope and return ResponseEnvelope.
 
-        Only methods explicitly included in ``allowed_methods`` can be
-        dispatched through this dispatcher.
+        Dispatcher owns command routing only.
+        Response construction is kept transport-independent.
         """
 
-        normalized_name = self._normalize_name(name)
-        normalized_methods = self._normalize_methods(allowed_methods)
+        started = time.perf_counter()
 
-        if not normalized_methods:
-            raise ValueError(
-                f"Target '{normalized_name}' must have at least one allowed method."
+        try:
+            target_class = self._normalize_target_class(
+                command.target_class
+            )
+            target_method = self._normalize_target_method(
+                command.target_method
             )
 
-        for method_name in normalized_methods:
-            method = getattr(target, method_name, None)
+            handler = self._resolve_handler(target_class)
+            method = self._resolve_method(
+                target_class=target_class,
+                handler=handler,
+                method_name=target_method,
+            )
 
-            if method is None or not callable(method):
-                raise InvalidTargetError(
-                    f"Target '{normalized_name}' does not provide "
-                    f"callable method '{method_name}'."
-                )
+            result = method(command.params)
 
-        self._targets[normalized_name] = DispatchTarget(
-            name=normalized_name,
-            target=target,
-            allowed_methods=frozenset(normalized_methods),
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+
+            return ResponseEnvelope.success(
+                correlation_id=command.correlation_id,
+                data=result,
+                schema_version="Mt5ResultV1",
+                metadata={
+                    "target_class": target_class,
+                    "target_method": target_method,
+                    "elapsed_ms": round(elapsed_ms, 3),
+                },
+            )
+
+        except UnknownTargetError as exc:
+            return self._error_response(
+                command=command,
+                error_code="UNKNOWN_TARGET",
+                error_message=str(exc),
+                started=started,
+            )
+
+        except UnknownMethodError as exc:
+            return self._error_response(
+                command=command,
+                error_code="UNKNOWN_METHOD",
+                error_message=str(exc),
+                started=started,
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "Command dispatch failed: target_class=%s target_method=%s",
+                getattr(command, "target_class", None),
+                getattr(command, "target_method", None),
+            )
+
+            return self._error_response(
+                command=command,
+                error_code="DISPATCH_ERROR",
+                error_message=str(exc),
+                started=started,
+            )
+
+    def dispatch_dict(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        correlation_id: Optional[str] = None,
+        priority: Optional[int] = None,
+    ) -> ResponseEnvelope:
+        """
+        Compatibility helper.
+
+        برای زمانی که هنوز caller کاملاً به CommandEnvelope مهاجرت نکرده
+        مفید است.
+
+        ساخت CommandEnvelope در همین مرز انجام می‌شود تا business handler
+        با dict خام transport کار نکند.
+        """
+
+        command = CommandEnvelope.from_dict(
+            dict(payload),
+            correlation_id=correlation_id,
+            priority=priority,
         )
 
-    def unregister_target(self, name: str) -> None:
-        """Remove a target from the registry."""
-
-        normalized_name = self._normalize_name(name)
-        self._targets.pop(normalized_name, None)
-
-    def has_target(self, name: str) -> bool:
-        """Return whether a target is registered."""
-
-        normalized_name = self._normalize_name(name)
-        return normalized_name in self._targets
-
-    def registered_targets(self) -> tuple[str, ...]:
-        """Return registered target names."""
-
-        return tuple(self._targets.keys())
+        return self.dispatch(command)
 
     # ------------------------------------------------------------------
-    # Dispatch
-    # ------------------------------------------------------------------
-
-    def dispatch(self, command: CommandEnvelope) -> Any:
-        """
-        Dispatch a CommandEnvelope to its registered target method.
-
-        Parameters
-        ----------
-        command:
-            Canonical transport-independent CommandEnvelope.
-
-        Returns
-        -------
-        Any
-            Return value of the target method.
-
-        Raises
-        ------
-        TargetNotRegisteredError
-            If target_class is not registered.
-
-        MethodNotAllowedError
-            If target_method is not explicitly allowed.
-
-        DispatcherError
-            If the command is invalid for dispatch.
-        """
-
-        if not isinstance(command, CommandEnvelope):
-            raise TypeError(
-                "dispatch() expects a CommandEnvelope instance."
-            )
-
-        target_name = self._normalize_name(command.target_class)
-        method_name = self._normalize_name(command.target_method)
-
-        target_entry = self._targets.get(target_name)
-
-        if target_entry is None:
-            raise TargetNotRegisteredError(
-                f"Target class '{target_name}' is not registered."
-            )
-
-        if method_name not in target_entry.allowed_methods:
-            raise MethodNotAllowedError(
-                f"Method '{method_name}' is not allowed for "
-                f"target '{target_name}'."
-            )
-
-        method = getattr(target_entry.target, method_name, None)
-
-        if method is None or not callable(method):
-            # This should normally be impossible because registration
-            # validates the methods, but the check protects against a
-            # mutated target object.
-            raise InvalidTargetError(
-                f"Registered target '{target_name}' does not provide "
-                f"callable method '{method_name}'."
-            )
-
-        params = command.params
-
-        if params is None:
-            params = {}
-
-        if not isinstance(params, Mapping):
-            raise DispatcherError(
-                f"Command parameters for '{target_name}.{method_name}' "
-                "must be a mapping."
-            )
-
-        try:
-            return method(**dict(params))
-        except TypeError:
-            # Do not transform the original execution error into a
-            # generic dispatcher error. The caller needs the original
-            # TypeError information for response/error handling.
-            raise
-
-    # ------------------------------------------------------------------
-    # Inspection
-    # ------------------------------------------------------------------
-
-    def allowed_methods(self, name: str) -> frozenset[str]:
-        """Return the explicitly allowed methods for a target."""
-
-        normalized_name = self._normalize_name(name)
-
-        target_entry = self._targets.get(normalized_name)
-
-        if target_entry is None:
-            raise TargetNotRegisteredError(
-                f"Target class '{normalized_name}' is not registered."
-            )
-
-        return target_entry.allowed_methods
-
-    def can_dispatch(
-        self,
-        target_class: str,
-        target_method: str,
-    ) -> bool:
-        """
-        Check whether a target/method pair is explicitly dispatchable.
-
-        This method does not execute anything.
-        """
-
-        try:
-            target_name = self._normalize_name(target_class)
-            method_name = self._normalize_name(target_method)
-        except ValueError:
-            return False
-
-        target_entry = self._targets.get(target_name)
-
-        if target_entry is None:
-            return False
-
-        return method_name in target_entry.allowed_methods
-
-    # ------------------------------------------------------------------
-    # Internal helpers
+    # Target resolution
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _normalize_name(value: str) -> str:
-        """Normalize and validate target/method names."""
+    def _normalize_target_class(target_class: Any) -> str:
+        if target_class is None:
+            raise UnknownTargetError("target_class is required")
 
-        if not isinstance(value, str):
-            raise ValueError("Target and method names must be strings.")
+        value = str(target_class).strip()
 
-        normalized = value.strip()
+        if not value:
+            raise UnknownTargetError("target_class is empty")
 
-        if not normalized:
-            raise ValueError("Target and method names cannot be empty.")
+        return value
 
-        return normalized
+    @staticmethod
+    def _normalize_target_method(target_method: Any) -> str:
+        if target_method is None:
+            raise UnknownMethodError("target_method is required")
 
-    @classmethod
-    def _normalize_methods(
-        cls,
-        methods: set[str] | frozenset[str] | list[str] | tuple[str, ...],
-    ) -> set[str]:
-        """Normalize an iterable of method names."""
+        value = str(target_method).strip()
 
-        if not isinstance(methods, (set, frozenset, list, tuple)):
-            raise TypeError(
-                "allowed_methods must be a set, frozenset, list, or tuple."
+        if not value:
+            raise UnknownMethodError("target_method is empty")
+
+        return value
+
+    def _resolve_handler(self, target_class: str) -> Any:
+        """
+        Resolve target only through explicit allowlist.
+
+        مهم:
+        اینجا از import پویا یا class name ورودی استفاده نمی‌کنیم.
+        """
+
+        handler = self._handlers.get(target_class)
+
+        if handler is None:
+            raise UnknownTargetError(
+                f"Unsupported target_class: {target_class}"
             )
 
-        normalized: set[str] = set()
+        return handler
 
-        for method in methods:
-            normalized.add(cls._normalize_name(method))
+    def _resolve_method(
+        self,
+        *,
+        target_class: str,
+        handler: Any,
+        method_name: str,
+    ) -> Callable[[Dict[str, Any]], Any]:
+        """
+        Resolve a method after allowlist validation.
+        """
 
-        return normalized
+        allowed = self._allowed_methods.get(target_class)
 
+        if allowed is None:
+            raise UnknownTargetError(
+                f"No method allowlist for target_class: {target_class}"
+            )
 
-# ----------------------------------------------------------------------
-# Backward-compatible alias
-# ----------------------------------------------------------------------
+        if method_name not in allowed:
+            raise UnknownMethodError(
+                f"Unsupported method '{method_name}' "
+                f"for target_class '{target_class}'"
+            )
 
-Dispatcher = CommandDispatcher
+        method = getattr(handler, method_name, None)
+
+        if method is None or not callable(method):
+            raise UnknownMethodError(
+                f"Handler method '{method_name}' is not available "
+                f"for target_class '{target_class}'"
+            )
+
+        return method
+
+    # ------------------------------------------------------------------
+    # Response helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _error_response(
+        *,
+        command: CommandEnvelope,
+        error_code: str,
+        error_message: str,
+        started: float,
+    ) -> ResponseEnvelope:
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+
+        return ResponseEnvelope.error(
+            correlation_id=command.correlation_id,
+            error_code=error_code,
+            error_message=error_message,
+            schema_version="Mt5ResultV1",
+            metadata={
+                "target_class": command.target_class,
+                "target_method": command.target_method,
+                "elapsed_ms": round(elapsed_ms, 3),
+            },
+        )
 
 
 __all__ = [
-    "CommandDispatcher",
     "Dispatcher",
-    "DispatchTarget",
-    "DispatcherError",
-    "TargetNotRegisteredError",
-    "MethodNotAllowedError",
-    "InvalidTargetError",
+    "DispatchError",
+    "UnknownTargetError",
+    "UnknownMethodError",
 ]
