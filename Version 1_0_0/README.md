@@ -1,20 +1,65 @@
-مانی جان، این یک فایل `README.md` استاندارد، جامع و فوق‌العاده حرفه‌ای در سطح Enterprise/Production است که معماری هگزاگونال، پشته امنیتی، لایه‌های پایپ‌لاین، پیکربندی، نحوه استقرار (Docker/K8s/Windows Service) و تمام جزئیات فنی ۶۰ ماژول کد را پوشش می‌دهد:
+<div align="center">
 
-```markdown
-# 🏛️ Enterprise MetaTrader 5 (MT5) AI-Driven Trading Agent
+<h1>🏛️ Enterprise MetaTrader 5 (MT5) AI-Driven Trading Agent</h1>
 
-[![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
-[![Architecture](https://img.shields.io/badge/Architecture-Hexagonal%20%2F%20Clean-emerald.svg)](#architecture-overview)
-[![Transport](https://img.shields.io/badge/Transport-Kafka%20%7C%20mTLS%20Gateway-orange.svg)](#transport-layer)
-[![Reliability](https://img.shields.io/badge/Reliability-SQLite%20WAL%20Spooler%20%7C%20Circuit%20Breaker-purple.svg)](#persistence--reliability)
-[![Security](https://img.shields.io/badge/Security-mTLS%20%7C%20ACL%20%7C%20Deterministic%20Identity-red.svg)](#security--governance)
-[![License](https://img.shields.io/badge/License-Proprietary-lightgrey.svg)](#)
+<p><strong>A mission-critical, transport-agnostic execution engine bridging algorithmic/AI trading systems with MetaTrader 5 terminals.</strong></p>
 
+<p>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg" alt="Python Version"></a>
+  <a href="#-architecture-overview"><img src="https://img.shields.io/badge/Architecture-Hexagonal%20%2F%20Clean-emerald.svg" alt="Architecture"></a>
+  <a href="#-transport-layer"><img src="https://img.shields.io/badge/Transport-Kafka%20%7C%20mTLS%20Gateway-orange.svg" alt="Transport"></a>
+  <a href="#-persistence--resilience-engine"><img src="https://img.shields.io/badge/Reliability-SQLite%20WAL%20Spooler%20%7C%20Circuit%20Breaker-purple.svg" alt="Reliability"></a>
+  <a href="#-security--governance"><img src="https://img.shields.io/badge/Security-mTLS%20%7C%20ACL%20%7C%20Deterministic%20Identity-red.svg" alt="Security"></a>
+  <a href="#-license--compliance"><img src="https://img.shields.io/badge/License-Proprietary-lightgrey.svg" alt="License"></a>
+</p>
+
+</div>
+
+---
+
+## 📖 Table of Contents
+
+- [Overview](#-overview)
+- [Key Features](#-key-features)
+- [Architecture Overview](#-architecture-overview)
+- [Project Structure](#-project-structure)
+- [Security & Governance](#-security--governance)
+- [Persistence & Resilience Engine](#-persistence--resilience-engine)
+- [Configuration Specification](#️-configuration-specification)
+- [Installation & Deployment](#-installation--deployment)
+- [Command & Response Lifecycle](#-command--response-lifecycle)
+- [Testing & Verification](#-testing--verification)
+- [Telemetry & Health Endpoints](#️-telemetry--health-endpoints)
+- [License & Compliance](#-license--compliance)
 ---
 
 ## 📌 Overview
 
-The **Enterprise MT5 Trading Agent** is a mission-critical, resilient, and transport-agnostic microservice designed to bridge algorithmic/AI trading engines with MetaTrader 5 terminals. Engineered under strict **Clean/Hexagonal Architecture** principles, the agent provides robust execution, deterministic machine identity, military-grade log redaction, durable message spooling with SQLite WAL, and multi-transport connectivity (Apache Kafka & HTTPS/mTLS Gateway).
+The **Enterprise MT5 Trading Agent** is a mission-critical, resilient, and transport-agnostic microservice designed to bridge algorithmic and AI-driven trading engines with MetaTrader 5 terminals.
+
+Engineered under strict **Clean / Hexagonal Architecture** principles, the agent provides:
+
+- **Robust execution** of trading commands against MT5 terminals
+- **Deterministic machine identity** backed by hardware fingerprinting
+- **Military-grade log redaction** to prevent credential leakage
+- **Durable message spooling** with SQLite WAL journaling
+- **Multi-transport connectivity** via Apache Kafka and HTTPS/mTLS Gateway
+
+The system is designed for **24/7 unattended operation** in regulated environments where reliability, auditability, and failure containment are non-negotiable.
+
+---
+
+## ✨ Key Features
+
+| Domain | Capability |
+| :--- | :--- |
+| **Execution** | Deterministic command envelope versioning (V1) with priority scheduling and aging |
+| **Transport** | Pluggable Kafka (SASL_SSL) & HTTPS/mTLS Gateway transports via `ITransportClient` |
+| **Reliability** | SQLite WAL spooler with **At-Least-Once Delivery**, circuit breaker, and idempotency guard |
+| **Security** | Deterministic hardware fingerprint, deny-by-default ACL, deep recursive log redaction |
+| **Observability** | Structured JSON logging, liveness/readiness probes, periodic heartbeats |
+| **Operations** | Windows Service host, graceful shutdown, hot-reloading configuration |
+| **Architecture** | Hexagonal boundaries isolating domain logic from adapters, transport, and persistence |
 
 ---
 
@@ -22,7 +67,7 @@ The **Enterprise MT5 Trading Agent** is a mission-critical, resilient, and trans
 
 The system isolates domain and execution logic from transport, persistence, and external broker drivers.
 
-```
+```text
                                  ┌─────────────────────────────────────────┐
                                  │   External Control Plane / AI Engine    │
                                  └────────────────────┬────────────────────┘
@@ -32,7 +77,7 @@ The system isolates domain and execution logic from transport, persistence, and 
  │                                              TRANSPORT LAYER                                            │
  │   ┌──────────────────────────────────────────────────┐   ┌──────────────────────────────────────────┐   │
  │   │ KafkaTransport (Listener + Responder)            │   │ GatewayHttpTransport (REST / Polling)    │   │
- │   │ - Dynamic Topic Injection (cmd.{id}.p0/p1/p2)   │   │ - Strict TLS/mTLS Verification           │   │
+ │   │ - Dynamic Topic Injection (cmd.{id}.p0/p1/p2)    │   │ - Strict TLS/mTLS Verification           │   │
  │   │ - Commit Policy: AUTO / MANUAL / AFTER_RESPONSE  │   │ - Idempotent-Aware Retry & Exponential   │   │
  │   └─────────────────────────┬────────────────────────┘   └────────────────────┬─────────────────────┘   │
  └─────────────────────────────┼─────────────────────────────────────────────────┼─────────────────────────┘
@@ -80,7 +125,7 @@ The system isolates domain and execution logic from transport, persistence, and 
 
 ## 📂 Project Structure
 
-```bash
+```text
 agent/
 ├── adapters/                 # Boundaries to external runtimes & terminals
 │   ├── mt5_adapter.py        # MT5 native API wrapper & trading primitives
@@ -148,31 +193,49 @@ agent/
 
 ## 🔒 Security & Governance
 
-1. **Deterministic Agent Fingerprint (`client_auth.py`):**
-   * Computes an immutable Machine ID derived from `Windows MachineGuid` + `Primary MAC Address` + `Node Name` hashed with `SHA-256`.
-   * Stored atomically with temporary file swaps and explicit `fsync` barriers.
-2. **Deny-by-Default Command ACL (`command_authorizer.py`):**
-   * Every incoming envelope is checked against a strict allowlist. Unauthorized actions fail fast with `COMMAND_UNAUTHORIZED` before touching the terminal.
-3. **Data Redaction & Sanitization (`redaction.py`):**
-   * Deep recursive scrubbing on dictionaries, lists, and embedded JSON strings.
-   * Intercepts standard logging handlers to prevent credential/token leaks in console/file outputs.
-4. **Mutual TLS (mTLS):**
-   * Hardened SSLContext requiring paired private keys and CA bundles. Disabling certificate verification (`verify=False`) is strictly rejected at the schema level.
+### 1. Deterministic Agent Fingerprint — `client_auth.py`
+
+Computes an immutable Machine ID derived from:
+
+- `Windows MachineGuid`
+- `Primary MAC Address`
+- `Node Name`
+
+Hashed with `SHA-256` and stored atomically via temporary file swaps with explicit `fsync` barriers.
+
+### 2. Deny-by-Default Command ACL — `command_authorizer.py`
+
+Every incoming envelope is validated against a strict allowlist. Unauthorized actions fail fast with `COMMAND_UNAUTHORIZED` **before** touching the terminal.
+
+### 3. Data Redaction & Sanitization — `redaction.py`
+
+- Deep recursive scrubbing across dictionaries, lists, and embedded JSON strings
+- Intercepts standard logging handlers to prevent credential/token leaks in console and file outputs
+
+### 4. Mutual TLS (mTLS)
+
+Hardened `SSLContext` requiring paired private keys and CA bundles. Disabling certificate verification (`verify=False`) is strictly rejected at the schema level.
 
 ---
 
 ## ⚡ Persistence & Resilience Engine
 
-* **SQLite WAL Spooler (`sqlite_spooler.py`):**
-  Guarantees **At-Least-Once Delivery** during broker connectivity loss or ungraceful shutdown.
-  ```
-  [Received] ➔ [PENDING] ➔ [PROCESSING] ➔ [ACKNOWLEDGED]
-                                 └──(Fail)➔ [RETRY_SCHEDULED] ➔ [DEAD]
-  ```
-* **Circuit Breaker (`circuit_breaker.py`):**
-  Protects MT5 terminals from cascading failures during network degradation or broker freezes. Transitions across `CLOSED`, `OPEN`, and `HALF_OPEN` states.
-* **Idempotency Guard (`idempotency.py`):**
-  Prevents duplicate execution of non-idempotent trading operations (e.g., market orders) caused by network retries.
+### SQLite WAL Spooler — `sqlite_spooler.py`
+
+Guarantees **At-Least-Once Delivery** during broker connectivity loss or ungraceful shutdown.
+
+```text
+[Received] ➔ [PENDING] ➔ [PROCESSING] ➔ [ACKNOWLEDGED]
+                             └──(Fail)➔ [RETRY_SCHEDULED] ➔ [DEAD]
+```
+
+### Circuit Breaker — `circuit_breaker.py`
+
+Protects MT5 terminals from cascading failures during network degradation or broker freezes. Transitions across `CLOSED`, `OPEN`, and `HALF_OPEN` states.
+
+### Idempotency Guard — `idempotency.py`
+
+Prevents duplicate execution of non-idempotent trading operations (e.g., market orders) caused by network retries.
 
 ---
 
@@ -230,11 +293,15 @@ The agent reads from a hot-reloading `config.json` (or `config.jsonc`).
 ## 🚀 Installation & Deployment
 
 ### 1. Prerequisites
-* **Python:** 3.10, 3.11, or 3.12 (64-bit)
-* **MetaTrader 5 Terminal:** Build 3800+ installed on host
-* **Operating System:** Windows 10/11 / Windows Server 2019/2022 (Native MT5) or Linux via Wine/K8s sidecar
+
+| Component | Requirement |
+| :--- | :--- |
+| **Python** | 3.10, 3.11, or 3.12 (64-bit) |
+| **MetaTrader 5 Terminal** | Build 3800+ installed on host |
+| **Operating System** | Windows 10/11, Windows Server 2019/2022 (native MT5), or Linux via Wine / K8s sidecar |
 
 ### 2. Environment Setup
+
 ```powershell
 # Clone the repository
 git clone https://github.com/your-org/mt5-trading-agent.git
@@ -248,7 +315,8 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 3. Running as Console Application
+### 3. Running as a Console Application
+
 ```powershell
 # Run using the modular execution entry point
 python -m agent
@@ -258,6 +326,7 @@ python main.py
 ```
 
 ### 4. Running as a Windows Service (Production)
+
 ```powershell
 # Install the Windows Service
 python service_host.py install
@@ -276,7 +345,7 @@ Get-Service -Name "MT5Agent"
 
 ## 🔄 Command & Response Lifecycle
 
-```
+```text
 1. [Broker/Engine] ──> Kafka Topic (cmd.{agent_id}.p0)
                              │
 2. [KafkaListener] ──> Deserialize JSON / Validate Envelope (CommandEnvelopeV1)
@@ -325,7 +394,15 @@ The agent exposes internal health semantics consumed by container orchestrators 
 
 ## 📄 License & Compliance
 
-Confidential & Proprietary. Developed for secure, automated trading infrastructure. All rights reserved.
-```
+**Confidential & Proprietary.**
+
+Developed for secure, automated trading infrastructure. All rights reserved. Unauthorized distribution, reproduction, or use of this software, in whole or in part, is strictly prohibited without prior written consent from the copyright holder.
 
 ---
+
+<div align="center">
+
+**Built for resilience. Engineered for trust.**
+
+</div>
+
