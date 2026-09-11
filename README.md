@@ -1,16 +1,17 @@
-```markdown
 <div align="center">
 
-# 🏛️ Enterprise MetaTrader 5 (MT5) AI-Driven Trading Agent
+<h1>🏛️ Enterprise MetaTrader 5 (MT5) AI-Driven Trading Agent</h1>
 
-**A mission-critical, transport-agnostic execution engine bridging algorithmic/AI trading systems with MetaTrader 5 terminals.**
+<p><strong>A mission-critical, transport-agnostic execution engine bridging algorithmic/AI trading systems with MetaTrader 5 terminals.</strong></p>
 
-[![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
-[![Architecture](https://img.shields.io/badge/Architecture-Hexagonal%20%2F%20Clean-emerald.svg)](#-architecture-overview)
-[![Transport](https://img.shields.io/badge/Transport-Kafka%20%7C%20mTLS%20Gateway-orange.svg)](#-transport-layer)
-[![Reliability](https://img.shields.io/badge/Reliability-SQLite%20WAL%20Spooler%20%7C%20Circuit%20Breaker-purple.svg)](#-persistence--resilience-engine)
-[![Security](https://img.shields.io/badge/Security-mTLS%20%7C%20ACL%20%7C%20Deterministic%20Identity-red.svg)](#-security--governance)
-[![License](https://img.shields.io/badge/License-Proprietary-lightgrey.svg)](#-license--compliance)
+<p>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg" alt="Python Version"></a>
+  <a href="#-architecture-overview"><img src="https://img.shields.io/badge/Architecture-Hexagonal%20%2F%20Clean-emerald.svg" alt="Architecture"></a>
+  <a href="#-transport-layer"><img src="https://img.shields.io/badge/Transport-Kafka%20%7C%20mTLS%20Gateway-orange.svg" alt="Transport"></a>
+  <a href="#-persistence--resilience-engine"><img src="https://img.shields.io/badge/Reliability-SQLite%20WAL%20Spooler%20%7C%20Circuit%20Breaker-purple.svg" alt="Reliability"></a>
+  <a href="#-security--governance"><img src="https://img.shields.io/badge/Security-mTLS%20%7C%20ACL%20%7C%20Deterministic%20Identity-red.svg" alt="Security"></a>
+  <a href="#-license--compliance"><img src="https://img.shields.io/badge/License-Proprietary-lightgrey.svg" alt="License"></a>
+</p>
 
 </div>
 
@@ -30,7 +31,6 @@
 - [Testing & Verification](#-testing--verification)
 - [Telemetry & Health Endpoints](#️-telemetry--health-endpoints)
 - [License & Compliance](#-license--compliance)
-
 ---
 
 ## 📌 Overview
