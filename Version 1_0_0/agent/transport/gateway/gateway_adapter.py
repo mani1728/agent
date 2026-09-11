@@ -1,20 +1,13 @@
-# Path: agent/transport/gateway_adapter.py
+# Path: Version 1_0_0/agent/transport/gateway/gateway_adapter.py
 
 """HTTPS + mTLS transport adapter for the Edge Gateway.
 
 This module provides the concrete HTTP transport used by the Agent to
 communicate with an Edge Gateway.
 
-Responsibilities
-----------------
-- Poll commands from the Gateway.
-- Send command responses to the Gateway.
-- Send agent heartbeat/status information.
-- Acknowledge processed commands.
-- Configure HTTPS and optional mutual TLS (mTLS).
-
-The rest of the application depends only on ``ITransportClient`` and
-the transport-independent contracts.
+The transport depends only on transport-independent contracts and the
+ITransportClient interface. Retry, persistence, circuit breaking and
+advanced security policies belong to later migration phases.
 """
 
 from __future__ import annotations
@@ -26,10 +19,11 @@ import requests
 from requests import Response
 from requests.exceptions import RequestException
 
-from agent.transport.base import ITransportClient
 from agent.contracts.command import CommandEnvelope
 from agent.contracts.heartbeat import HeartbeatPayload
 from agent.contracts.response import ResponseEnvelope
+from agent.transport.base import ITransportClient
+
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +34,7 @@ class GatewayHttpTransport(ITransportClient):
     Parameters
     ----------
     gateway_url:
-        Base URL of the Edge Gateway, for example:
-        ``https://gateway.example.com``.
+        Base URL of the Edge Gateway.
 
     agent_id:
         Unique identifier of this Agent.
@@ -50,11 +43,11 @@ class GatewayHttpTransport(ITransportClient):
         Path to the client certificate used for mTLS.
 
     client_key_path:
-        Path to the private key corresponding to ``client_cert_path``.
+        Path to the private key corresponding to the client certificate.
 
     ca_cert_path:
         Optional CA certificate/bundle used to verify the Gateway
-        certificate. If omitted, ``requests`` uses the system CA store.
+        certificate. If omitted, requests uses the system CA store.
 
     timeout:
         Default HTTP request timeout in seconds.
@@ -70,19 +63,13 @@ class GatewayHttpTransport(ITransportClient):
         timeout: float = 5.0,
     ) -> None:
         if not isinstance(gateway_url, str) or not gateway_url.strip():
-            raise ValueError(
-                "gateway_url must be a non-empty string"
-            )
+            raise ValueError("gateway_url must be a non-empty string")
 
         if not isinstance(agent_id, str) or not agent_id.strip():
-            raise ValueError(
-                "agent_id must be a non-empty string"
-            )
+            raise ValueError("agent_id must be a non-empty string")
 
         if timeout <= 0:
-            raise ValueError(
-                "timeout must be greater than zero"
-            )
+            raise ValueError("timeout must be greater than zero")
 
         if bool(client_cert_path) != bool(client_key_path):
             raise ValueError(
@@ -96,9 +83,9 @@ class GatewayHttpTransport(ITransportClient):
 
         self.session = requests.Session()
 
-        # --------------------------------------------------------------
-        # TLS / mTLS configuration
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # TLS / mTLS
+        # ------------------------------------------------------------------
 
         if client_cert_path and client_key_path:
             self.session.cert = (
@@ -106,16 +93,18 @@ class GatewayHttpTransport(ITransportClient):
                 client_key_path,
             )
 
+        # requests verifies TLS certificates by default.
+        # Never disable certificate verification here.
         if ca_cert_path:
             self.session.verify = ca_cert_path
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------------
         # Common HTTP headers
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------------
 
         self.session.headers.update(
             {
-                "User-Agent": f"Bank-Agent/{self.agent_id}",
+                "User-Agent": f"MT5-Agent/{self.agent_id}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             }
@@ -128,15 +117,9 @@ class GatewayHttpTransport(ITransportClient):
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Initialize/start the Gateway transport.
-
-        ``requests.Session`` does not require an explicit network
-        connection, so startup only marks the transport as active.
-        """
+        """Start the Gateway transport."""
         if self._started:
-            logger.debug(
-                "Gateway transport is already started."
-            )
+            logger.debug("Gateway transport is already started.")
             return
 
         self._started = True
@@ -147,19 +130,11 @@ class GatewayHttpTransport(ITransportClient):
         )
 
     def stop(self) -> None:
-        """Close the HTTP session and release transport resources."""
-        if not self._started:
-            # Closing a requests session more than once is harmless, but
-            # keeping stop() idempotent makes lifecycle management safer.
-            self.session.close()
-            return
-
+        """Stop the Gateway transport and release HTTP resources."""
         self._started = False
         self.session.close()
 
-        logger.info(
-            "Gateway transport session closed."
-        )
+        logger.info("Gateway transport session closed.")
 
     # ------------------------------------------------------------------
     # Commands
@@ -171,8 +146,8 @@ class GatewayHttpTransport(ITransportClient):
     ) -> Sequence[CommandEnvelope]:
         """Poll the Gateway for new commands.
 
-        Invalid individual commands are logged and skipped rather than
-        bringing down the polling loop.
+        Invalid individual commands are skipped so that one malformed
+        command cannot terminate the polling loop.
         """
         if timeout_sec <= 0:
             raise ValueError(
@@ -217,8 +192,7 @@ class GatewayHttpTransport(ITransportClient):
 
         if not isinstance(payload, Mapping):
             logger.error(
-                "Gateway command response must be a JSON object; "
-                "got %s.",
+                "Gateway command response must be a JSON object; got %s.",
                 type(payload).__name__,
             )
             return []
@@ -230,8 +204,7 @@ class GatewayHttpTransport(ITransportClient):
 
         if not isinstance(raw_commands, list):
             logger.error(
-                "Gateway 'commands' field must be a list; "
-                "got %s.",
+                "Gateway 'commands' field must be a list; got %s.",
                 type(raw_commands).__name__,
             )
             return []
@@ -251,6 +224,10 @@ class GatewayHttpTransport(ITransportClient):
             try:
                 envelope = CommandEnvelope.from_dict(
                     raw_command,
+                    metadata={
+                        "transport": "gateway",
+                        "request_index": index,
+                    },
                 )
             except (TypeError, ValueError) as exc:
                 logger.warning(
@@ -283,12 +260,10 @@ class GatewayHttpTransport(ITransportClient):
             f"/v1/agents/{self.agent_id}/results"
         )
 
-        payload = response.to_dict()
-
         try:
             result = self.session.post(
                 url,
-                json=payload,
+                json=response.to_dict(),
                 timeout=self.timeout,
             )
         except RequestException as exc:
@@ -313,7 +288,7 @@ class GatewayHttpTransport(ITransportClient):
 
     def send_heartbeat(
         self,
-        agent_status: HeartbeatPayload | Mapping[str, Any],
+        status: HeartbeatPayload | Mapping[str, Any],
     ) -> bool:
         """Send Agent health/status information to the Gateway."""
         url = (
@@ -321,14 +296,13 @@ class GatewayHttpTransport(ITransportClient):
             f"/v1/agents/{self.agent_id}/heartbeat"
         )
 
-        if isinstance(agent_status, HeartbeatPayload):
-            payload = agent_status.to_dict()
-        elif isinstance(agent_status, Mapping):
-            payload = dict(agent_status)
+        if isinstance(status, HeartbeatPayload):
+            payload = status.to_dict()
+        elif isinstance(status, Mapping):
+            payload = dict(status)
         else:
             raise TypeError(
-                "agent_status must be a HeartbeatPayload "
-                "or a mapping"
+                "status must be a HeartbeatPayload or a mapping"
             )
 
         try:
@@ -409,7 +383,6 @@ class GatewayHttpTransport(ITransportClient):
         """Log an unexpected HTTP response without exposing secrets."""
         body = response.text.strip()
 
-        # Avoid flooding logs with very large Gateway responses.
         if len(body) > 500:
             body = body[:500] + "...[truncated]"
 
