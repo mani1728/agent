@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 
 from agent.contracts.command import CommandEnvelope
@@ -235,12 +236,68 @@ class TestP2Durability(unittest.TestCase):
             store_a = SQLiteIdempotencyStore(db_path)
             store_b = SQLiteIdempotencyStore(db_path)
             try:
-                for index in range(10):
-                    key = f"cmd-{index}"
-                    store_a.begin(key)
-                    store_b.begin(f"cmd-b-{index}")
+                barrier = threading.Barrier(2, timeout=10.0)
+                results = {}
+                errors = {}
+                fingerprint = fingerprint_payload({"volume": 1})
 
-                self.assertEqual(store_a.size(), 20)
+                def _contend(name, store):
+                    try:
+                        barrier.wait()
+                        for index in range(10):
+                            store.begin(f"cmd-{name}-{index}")
+                        results[name] = store.begin(
+                            "cmd-contested",
+                            fingerprint=fingerprint,
+                        )
+                    except Exception as exc:
+                        errors[name] = exc
+
+                thread_a = threading.Thread(
+                    target=_contend,
+                    args=("a", store_a),
+                    daemon=True,
+                )
+                thread_b = threading.Thread(
+                    target=_contend,
+                    args=("b", store_b),
+                    daemon=True,
+                )
+                thread_a.start()
+                thread_b.start()
+                thread_a.join(timeout=15.0)
+                thread_b.join(timeout=15.0)
+
+                self.assertFalse(thread_a.is_alive(), "thread a deadlocked")
+                self.assertFalse(thread_b.is_alive(), "thread b deadlocked")
+
+                accepted_count = 0
+                rejected_count = 0
+
+                for name in ("a", "b"):
+                    if name in results:
+                        outcome = results[name]
+                        if outcome.accepted:
+                            accepted_count += 1
+                        else:
+                            self.assertTrue(outcome.duplicate)
+                            self.assertIsNotNone(outcome.record)
+                            rejected_count += 1
+                    else:
+                        self.assertIsInstance(
+                            errors[name],
+                            IdempotencyError,
+                        )
+                        rejected_count += 1
+
+                self.assertEqual(accepted_count, 1)
+                self.assertEqual(rejected_count, 1)
+
+                self.assertEqual(store_a.size(), 21)
+
+                contested = store_a.get("cmd-contested")
+                self.assertIsNotNone(contested)
+                self.assertEqual(contested.fingerprint, fingerprint)
             finally:
                 store_a.close()
                 store_b.close()
