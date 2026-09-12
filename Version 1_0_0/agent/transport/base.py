@@ -15,11 +15,35 @@ No concrete transport implementation belongs in this module.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Sequence
+from dataclasses import dataclass
+from typing import Any, Optional, Sequence
 
 from ..contracts.command import CommandEnvelope
 from ..contracts.heartbeat import HeartbeatPayload
 from ..contracts.response import ResponseEnvelope
+
+
+@dataclass(slots=True)
+class AckToken:
+    """Transport-agnostic acknowledgement token.
+
+    Fields
+    ------
+    command_id:
+        Canonical command identifier.
+    ref:
+        Optional transport-specific commit/ack reference.
+        Examples:
+            - Kafka message object
+            - (topic, partition, offset)
+            - opaque broker delivery handle
+    meta:
+        Optional diagnostic metadata for logging/tracing only.
+    """
+
+    command_id: str
+    ref: Optional[Any] = None
+    meta: Optional[dict[str, Any]] = None
 
 
 class ITransportClient(ABC):
@@ -142,6 +166,8 @@ class ITransportClient(ABC):
     def ack_command(
         self,
         command_id: str,
+        *,
+        ack_token: Optional[AckToken] = None,
     ) -> None:
         """Acknowledge transport-level processing of a command.
 
@@ -149,21 +175,25 @@ class ITransportClient(ABC):
         ----------
         command_id:
             Unique command identifier being acknowledged.
+        ack_token:
+            Optional transport-agnostic token that can carry
+            transport-specific acknowledgement reference.
+
+            - For Kafka manual commit: this SHOULD include offset/message
+              reference required to commit safely.
+            - For transports without explicit ack semantics: may be None.
 
         Notes
         -----
         The exact acknowledgement semantics are transport-specific.
 
-        For example, Kafka may map this operation to offset handling,
-        while a future HTTP transport may implement it as a protocol
-        acknowledgement or make it a no-op.
-
-        The interface deliberately does not expose transport-specific
-        acknowledgement details.
+        The interface remains transport-agnostic while allowing concrete
+        adapters to receive commit metadata when needed.
         """
         raise NotImplementedError
 
 
 __all__ = [
+    "AckToken",
     "ITransportClient",
 ]
