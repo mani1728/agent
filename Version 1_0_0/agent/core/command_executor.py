@@ -38,7 +38,11 @@ from agent.security.command_authorizer import (
 )
 
 from .dispatcher import Dispatcher
-
+from agent.core.exceptions import (
+    ValidationError,
+    RetryableExternalError,
+    PermanentExternalError,
+)
 
 logger = logging.getLogger(__name__)
 

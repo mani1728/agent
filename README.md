@@ -241,7 +241,7 @@ Prevents duplicate execution of non-idempotent trading operations (e.g., market 
 
 ## ⚙️ Configuration Specification
 
-The agent reads from a hot-reloading `config.json` (or `config.jsonc`).
+The agent reads from a hot-reloading `config.jsonc` (or `config.jsonc`).
 
 ```json
 {

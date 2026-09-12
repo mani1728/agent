@@ -1,5 +1,24 @@
 # Path: Version 1_0_0/agent/security/command_authorizer.py
 
+"""Transport-independent command authorization.
+
+Responsibilities
+----------------
+- Decide whether a given ``CommandEnvelope`` is permitted to execute.
+- Provide a central, explicit authorization surface with two entry
+  points:
+    - ``allows(command) -> bool``  — non-raising check.
+    - ``require(command) -> None`` — raising check.
+
+This module intentionally does NOT perform:
+- authentication (who sent the command),
+- token / HMAC validation,
+- Kafka / HTTP / MT5 processing.
+
+Authentication establishes identity; authorization decides whether
+the identified caller may run the requested method.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -12,33 +31,41 @@ from agent.contracts.command import CommandEnvelope
 logger = logging.getLogger(__name__)
 
 
+# ----------------------------------------------------------------------
+# Exceptions
+# ----------------------------------------------------------------------
+
 class AuthorizationError(RuntimeError):
     """Base error for command authorization failures."""
 
 
 class CommandAuthorizationError(AuthorizationError):
-    """Raised when a command is not authorized."""
+    """Raised when a command is not authorized.
 
+    The message contains only ``target_class`` and ``target_method``
+    (never payload params or secrets), so it is safe to log verbatim.
+    """
+
+
+# ----------------------------------------------------------------------
+# Rule model
+# ----------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class AuthorizationRule:
-    """
-    Authorization rule for a target class and its allowed methods.
+    """Authorization rule for a target class and its allowed methods.
 
-    An empty methods collection means that no methods are allowed.
+    An empty ``methods`` collection means the rule allows nothing and
+    is discarded at validation time.
     """
 
     target_class: str
     methods: frozenset[str] = field(default_factory=frozenset)
     max_priority: Optional[int] = None
-    required_metadata: Mapping[str, Any] = field(
-        default_factory=dict
-    )
+    required_metadata: Mapping[str, Any] = field(default_factory=dict)
 
-    def allows(
-        self,
-        command: CommandEnvelope,
-    ) -> bool:
+    def allows(self, command: CommandEnvelope) -> bool:
+        """Return True if this rule permits ``command``."""
         if command.target_class != self.target_class:
             return False
 
@@ -58,22 +85,26 @@ class AuthorizationRule:
         return True
 
 
+# ----------------------------------------------------------------------
+# Authorizer
+# ----------------------------------------------------------------------
+
 class CommandAuthorizer:
-    """
-    Transport-independent command authorization.
+    """Central, transport-independent command authorizer.
 
-    Authorization is deny-by-default. A command must match an explicit
-    allowlist rule before it can be executed.
+    Authorization is **deny-by-default**: a command must match an
+    explicit allowlist rule before it can be executed.
 
-    This class deliberately does not perform:
-      - authentication
-      - token validation
-      - HMAC validation
-      - Kafka/HTTP processing
-      - MT5 execution
+    Two canonical entry points:
 
-    Authentication establishes who sent a command; this class decides
-    whether that command is permitted.
+    ``allows(command) -> bool``
+        Non-raising check. Useful for conditional routing, tests, or
+        UI feedback. Never raises on a normal, well-formed command.
+
+    ``require(command) -> None``
+        Raising check. Raises ``CommandAuthorizationError`` when the
+        command is not permitted. This is the ONLY method that
+        runtime execution paths should call before dispatch.
     """
 
     DEFAULT_RULES: tuple[AuthorizationRule, ...] = (
@@ -106,9 +137,11 @@ class CommandAuthorizer:
             else self.DEFAULT_RULES
         )
 
-        self._rules = self._validate_rules(
-            configured_rules
-        )
+        self._rules = self._validate_rules(configured_rules)
+
+    # ------------------------------------------------------------------
+    # Rule validation
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _validate_rules(
@@ -128,12 +161,13 @@ class CommandAuthorizer:
                     "Authorization rule target_class cannot be empty"
                 )
 
+            # Rules with no allowed methods are silently dropped: they
+            # cannot authorize anything.
             if not rule.methods:
                 continue
 
             if any(
-                not isinstance(method, str)
-                or not method.strip()
+                not isinstance(method, str) or not method.strip()
                 for method in rule.methods
             ):
                 raise ValueError(
@@ -153,6 +187,10 @@ class CommandAuthorizer:
 
         return tuple(result)
 
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
     @property
     def rules(self) -> tuple[AuthorizationRule, ...]:
         return self._rules
@@ -161,14 +199,21 @@ class CommandAuthorizer:
     def default_allow(self) -> bool:
         return self._default_allow
 
-    def is_authorized(
-        self,
-        command: CommandEnvelope,
-    ) -> bool:
+    # ------------------------------------------------------------------
+    # Primary API
+    # ------------------------------------------------------------------
+
+    def allows(self, command: CommandEnvelope) -> bool:
+        """Return True if ``command`` is authorized.
+
+        Never raises on a valid ``CommandEnvelope``. Raises ``TypeError``
+        if ``command`` is not a ``CommandEnvelope``.
+
+        This is the **non-raising** entry point. It is the preferred
+        name per the Patch 5 contract.
+        """
         if not isinstance(command, CommandEnvelope):
-            raise TypeError(
-                "command must be a CommandEnvelope"
-            )
+            raise TypeError("command must be a CommandEnvelope")
 
         for rule in self._rules:
             if rule.allows(command):
@@ -176,16 +221,17 @@ class CommandAuthorizer:
 
         return self._default_allow
 
-    def authorize(
-        self,
-        command: CommandEnvelope,
-    ) -> None:
-        """
-        Authorize a command or raise CommandAuthorizationError.
+    def require(self, command: CommandEnvelope) -> None:
+        """Authorize ``command`` or raise ``CommandAuthorizationError``.
 
-        No sensitive command parameters are included in the error message.
+        This is the **raising** entry point. Runtime execution paths
+        MUST call ``require`` before dispatch, so that unauthorized
+        commands fail loudly and early.
+
+        The error message contains only the target class and method,
+        never payload parameters or secrets.
         """
-        if self.is_authorized(command):
+        if self.allows(command):
             return
 
         raise CommandAuthorizationError(
@@ -193,32 +239,42 @@ class CommandAuthorizer:
             f"{command.target_class}.{command.target_method}"
         )
 
-    def authorize_or_false(
-        self,
-        command: CommandEnvelope,
-    ) -> bool:
-        """
-        Compatibility/helper form that returns False instead of raising.
+    # ------------------------------------------------------------------
+    # Backwards-compatible aliases
+    # ------------------------------------------------------------------
+
+    def is_authorized(self, command: CommandEnvelope) -> bool:
+        """Alias for :meth:`allows` (kept for backward compatibility)."""
+        return self.allows(command)
+
+    def authorize(self, command: CommandEnvelope) -> None:
+        """Alias for :meth:`require` (kept for backward compatibility)."""
+        return self.require(command)
+
+    def authorize_or_false(self, command: CommandEnvelope) -> bool:
+        """Return False instead of raising on malformed input.
+
+        Kept for backward compatibility with callers that preferred a
+        boolean outcome over exceptions.
         """
         try:
-            return self.is_authorized(command)
+            return self.allows(command)
         except (TypeError, ValueError):
             return False
+
+    # ------------------------------------------------------------------
+    # Introspection helpers
+    # ------------------------------------------------------------------
 
     def find_rule(
         self,
         command: CommandEnvelope,
     ) -> Optional[AuthorizationRule]:
-        """
-        Return the first matching authorization rule.
-
-        A matching target/method is returned even if a later constraint
-        such as max_priority or required metadata rejects the command.
+        """Return the first rule matching class+method (ignoring extra
+        constraints like ``max_priority`` or ``required_metadata``).
         """
         if not isinstance(command, CommandEnvelope):
-            raise TypeError(
-                "command must be a CommandEnvelope"
-            )
+            raise TypeError("command must be a CommandEnvelope")
 
         for rule in self._rules:
             if (
@@ -229,13 +285,8 @@ class CommandAuthorizer:
 
         return None
 
-    def allowed_methods(
-        self,
-        target_class: str,
-    ) -> frozenset[str]:
-        """
-        Return the union of explicitly allowed methods for a target.
-        """
+    def allowed_methods(self, target_class: str) -> frozenset[str]:
+        """Return the union of explicitly allowed methods for a target."""
         methods: set[str] = set()
 
         for rule in self._rules:
@@ -244,18 +295,17 @@ class CommandAuthorizer:
 
         return frozenset(methods)
 
-    def add_rule(
-        self,
-        rule: AuthorizationRule,
-    ) -> None:
-        """
-        Add an authorization rule at runtime.
+    # ------------------------------------------------------------------
+    # Runtime rule mutation (tests, config reload)
+    # ------------------------------------------------------------------
 
-        Runtime mutation is explicit and local; persistence/config reload
-        is intentionally handled elsewhere.
+    def add_rule(self, rule: AuthorizationRule) -> None:
+        """Add a rule at runtime.
+
+        Runtime mutation is explicit and local. Persistence and config
+        reload are handled elsewhere.
         """
         validated = self._validate_rules((rule,))
-
         if not validated:
             return
 
@@ -267,16 +317,13 @@ class CommandAuthorizer:
         target_class: Optional[str] = None,
         target_method: Optional[str] = None,
     ) -> int:
-        """
-        Remove matching rules and return the number of removed rules.
-        """
+        """Remove matching rules; return the number of removed rules."""
         if target_class is None and target_method is None:
             raise ValueError(
                 "At least one rule selector is required"
             )
 
         original_count = len(self._rules)
-
         retained: list[AuthorizationRule] = []
 
         for rule in self._rules:
@@ -284,7 +331,6 @@ class CommandAuthorizer:
                 target_class is None
                 or rule.target_class == target_class
             )
-
             method_matches = (
                 target_method is None
                 or target_method in rule.methods
@@ -300,12 +346,15 @@ class CommandAuthorizer:
         return original_count - len(self._rules)
 
 
-def build_default_authorizer() -> CommandAuthorizer:
-    """
-    Build the production-safe default authorizer.
+# ----------------------------------------------------------------------
+# Factory
+# ----------------------------------------------------------------------
 
-    The default policy is deny-by-default with the explicitly supported
-    Mt5_Manager command methods.
+def build_default_authorizer() -> CommandAuthorizer:
+    """Build the production-safe default authorizer.
+
+    Default policy: deny-by-default, with an explicit allowlist for
+    the supported ``Mt5_Manager`` methods.
     """
     return CommandAuthorizer(
         rules=CommandAuthorizer.DEFAULT_RULES,

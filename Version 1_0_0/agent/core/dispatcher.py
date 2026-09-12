@@ -1,26 +1,32 @@
 # Path: Version 1_0_0/agent/core/dispatcher.py
 
 # -*- coding: utf-8 -*-
-"""
-dispatcher.py
--------------
-Core command dispatcher.
+"""Core command dispatcher.
 
-مسئولیت:
-- دریافت CommandEnvelope
-- اعتبارسنجی target_class / target_method
-- Dispatch امن به handler مجاز
-- حفظ رفتار legacy مربوط به Mt5_Manager
+Responsibilities
+----------------
+- Receive a ``CommandEnvelope``.
+- Enforce centralized authorization BEFORE method resolution.
+- Validate ``target_class`` / ``target_method`` against an allowlist.
+- Dispatch safely to the resolved handler.
+- Preserve legacy ``Mt5_Manager`` behavior.
 
-این فایل عمداً:
-- هیچ وابستگی به Kafka ندارد
-- هیچ وابستگی به HTTP ندارد
-- Transport را نمی‌شناسد
-- Persistence / Retry / Circuit Breaker را پیاده‌سازی نمی‌کند
-- از getattr پویا بر اساس ورودی command برای دسترسی مستقیم استفاده نمی‌کند
+This module intentionally does NOT:
+- Depend on Kafka, HTTP, or any transport.
+- Depend on persistence, retry, or circuit-breaker logic.
+- Use ``getattr`` against unvalidated user input.
 
-اصل migration:
+Migration principle:
     Preserve behavior first, improve architecture second.
+
+Patch 6
+-------
+``Dispatcher`` now accepts an optional ``CommandAuthorizer``. When a
+non-None authorizer is supplied, ``dispatch`` calls
+``authorizer.require(command)`` as a central guard before touching the
+handler. Authorization failures surface as ``UnauthorizedCommandError``
+(never silently converted into a generic error response), so that the
+caller can classify the failure as permanent and skip retry.
 """
 
 from __future__ import annotations
@@ -34,12 +40,21 @@ from agent.contracts.response import ResponseEnvelope, ResponseStatus
 
 from agent.adapters.mt5_adapter import Mt5Adapter
 
+from agent.security.command_authorizer import (
+    CommandAuthorizationError,
+    CommandAuthorizer,
+)
+
 if TYPE_CHECKING:
     from .meta_trader_manager import Mt5_Manager
 
 
 logger = logging.getLogger(__name__)
 
+
+# ----------------------------------------------------------------------
+# Exceptions
+# ----------------------------------------------------------------------
 
 class DispatchError(Exception):
     """Base exception for dispatcher failures."""
@@ -53,16 +68,29 @@ class UnknownMethodError(DispatchError):
     """Raised when the requested method is not allowed."""
 
 
-class Dispatcher:
+class UnauthorizedCommandError(DispatchError):
+    """Raised when a command is not authorized by the central authorizer.
+
+    This is a *permanent* failure: the caller must NOT retry the same
+    command. Higher layers (worker) are expected to catch this and
+    translate it into a non-retryable nack / error response.
     """
-    Safe allowlist-based command dispatcher.
+
+
+# ----------------------------------------------------------------------
+# Dispatcher
+# ----------------------------------------------------------------------
+
+class Dispatcher:
+    """Safe allowlist-based command dispatcher.
 
     Legacy behavior:
-        target_class == "Mt5_Manager"
-            -> Mt5_Manager instance
 
-    برخلاف implementation قدیمی، نام متد مستقیماً از ورودی
-    به getattr() داده نمی‌شود؛ ابتدا باید در allowlist قرار داشته باشد.
+        ``target_class == "Mt5_Manager"`` maps to the ``Mt5_Manager``
+        adapter.
+
+    Unlike the old implementation, ``target_method`` is never fed to
+    ``getattr`` directly; it must first appear in an explicit allowlist.
     """
 
     DEFAULT_ALLOWED_METHODS = frozenset(
@@ -92,27 +120,28 @@ class Dispatcher:
         mt5_manager: Optional["Mt5_Manager"] = None,
         mt5_adapter: Optional[Mt5Adapter] = None,
         allowed_methods: Optional[Mapping[str, Any]] = None,
+        authorizer: Optional[CommandAuthorizer] = None,
     ) -> None:
+        """Create a dispatcher.
+
+        Parameters
+        ----------
+        mt5_manager:
+            Existing ``Mt5_Manager`` instance. When omitted, a fresh
+            adapter is created internally.
+        mt5_adapter:
+            Optional pre-built adapter (primarily for tests).
+        allowed_methods:
+            Optional per-target method allowlist. When ``None``,
+            ``DEFAULT_ALLOWED_METHODS`` is used for ``Mt5_Manager``.
+        authorizer:
+            Optional central ``CommandAuthorizer``. When provided,
+            every dispatch is guarded by ``authorizer.require(command)``.
+
+            Strongly recommended in production. When ``None``, a
+            warning is logged and authorization is effectively
+            skipped (legacy behavior preserved for migration).
         """
-        Args:
-            mt5_manager:
-                Existing Mt5_Manager instance.
-                اگر داده نشود، Dispatcher خودش یک instance می‌سازد.
-
-            allowed_methods:
-                Optional per-target method allowlist.
-
-                Example:
-                    {
-                        "Mt5_Manager": {
-                            "manage_connection",
-                            "manage_symbols",
-                        }
-                    }
-
-                اگر None باشد، DEFAULT_ALLOWED_METHODS استفاده می‌شود.
-        """
-
         if mt5_adapter is None:
             mt5_adapter = Mt5Adapter(manager=mt5_manager)
 
@@ -132,6 +161,14 @@ class Dispatcher:
                 for target, methods in allowed_methods.items()
             }
 
+        if authorizer is None:
+            logger.warning(
+                "Dispatcher created without a CommandAuthorizer; "
+                "authorization guard is DISABLED. This is unsafe for "
+                "production and intended only for migration/tests."
+            )
+        self._authorizer = authorizer
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -140,15 +177,42 @@ class Dispatcher:
         self,
         command: CommandEnvelope,
     ) -> ResponseEnvelope:
-        """
-        Execute one CommandEnvelope and return ResponseEnvelope.
+        """Execute one ``CommandEnvelope`` and return a ``ResponseEnvelope``.
 
-        Dispatcher owns command routing only.
-        Response construction is kept transport-independent.
-        """
+        Order of operations:
 
+        1. Central authorization guard (if an authorizer is configured).
+        2. Target class / method normalization.
+        3. Allowlist validation.
+        4. Handler resolution.
+        5. Method invocation.
+
+        Authorization failures are raised as ``UnauthorizedCommandError``
+        and are NOT swallowed into a generic error response. The caller
+        must classify them as permanent failures (no retry).
+        """
         started = time.perf_counter()
 
+        # ----------------------------------------------------------------
+        # 1. Central authorization guard
+        # ----------------------------------------------------------------
+        if self._authorizer is not None:
+            try:
+                self._authorizer.require(command)
+            except CommandAuthorizationError as exc:
+                logger.warning(
+                    "Command rejected by authorizer: "
+                    "target_class=%s target_method=%s",
+                    getattr(command, "target_class", None),
+                    getattr(command, "target_method", None),
+                )
+                # Re-raise as a dispatcher-level, permanent error so the
+                # worker can distinguish it from transient failures.
+                raise UnauthorizedCommandError(str(exc)) from exc
+
+        # ----------------------------------------------------------------
+        # 2..5. Route and execute
+        # ----------------------------------------------------------------
         try:
             target_class = self._normalize_target_class(
                 command.target_class
@@ -216,16 +280,11 @@ class Dispatcher:
         correlation_id: Optional[str] = None,
         priority: Optional[int] = None,
     ) -> ResponseEnvelope:
+        """Compatibility helper for callers that still pass raw dicts.
+
+        Builds a ``CommandEnvelope`` at this boundary so that business
+        handlers never see raw transport dicts.
         """
-        Compatibility helper.
-
-        برای زمانی که هنوز caller کاملاً به CommandEnvelope مهاجرت نکرده
-        مفید است.
-
-        ساخت CommandEnvelope در همین مرز انجام می‌شود تا business handler
-        با dict خام transport کار نکند.
-        """
-
         command = CommandEnvelope.from_dict(
             dict(payload),
             correlation_id=correlation_id,
@@ -263,13 +322,10 @@ class Dispatcher:
         return value
 
     def _resolve_handler(self, target_class: str) -> Any:
-        """
-        Resolve target only through explicit allowlist.
+        """Resolve a target only through the explicit allowlist.
 
-        مهم:
-        اینجا از import پویا یا class name ورودی استفاده نمی‌کنیم.
+        No dynamic import and no class-name injection from user input.
         """
-
         handler = self._handlers.get(target_class)
 
         if handler is None:
@@ -286,10 +342,7 @@ class Dispatcher:
         handler: Any,
         method_name: str,
     ) -> Callable[[Dict[str, Any]], Any]:
-        """
-        Resolve a method after allowlist validation.
-        """
-
+        """Resolve a bound method after allowlist validation."""
         allowed = self._allowed_methods.get(target_class)
 
         if allowed is None:
@@ -339,10 +392,20 @@ class Dispatcher:
             },
         )
 
+    # ------------------------------------------------------------------
+    # Introspection
+    # ------------------------------------------------------------------
+
+    @property
+    def authorizer(self) -> Optional[CommandAuthorizer]:
+        """Return the configured authorizer (may be None)."""
+        return self._authorizer
+
 
 __all__ = [
     "Dispatcher",
     "DispatchError",
     "UnknownTargetError",
     "UnknownMethodError",
+    "UnauthorizedCommandError",
 ]

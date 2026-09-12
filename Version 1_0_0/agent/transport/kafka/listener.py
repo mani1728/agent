@@ -1,64 +1,136 @@
 # Path: Version 1_0_0/agent/transport/kafka/listener.py
 
+"""Thin Kafka listener.
+
+Responsibilities
+----------------
+- Create and manage the Kafka Consumer.
+- Subscribe to configured command topics (with hot-reload).
+- Poll Kafka messages.
+- Wrap each record into a transport-agnostic ``TransportMessage``
+  carrying the raw payload and a lightweight ``AckToken``.
+
+This module intentionally does NOT:
+- Parse business commands.
+- Normalize legacy payload shapes.
+- Build ``CommandEnvelope`` instances.
+- Execute MT5 operations.
+- Commit offsets as part of business execution.
+
+All parsing/validation/normalization has been moved out of the
+transport layer (see Patch 2) so that ``KafkaListener`` stays a thin
+polling adapter.
+"""
+
 from __future__ import annotations
 
-import ast
-import json
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Sequence
-from uuid import uuid4
+from typing import Any, Optional, Sequence
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 
-from agent.contracts.command import CommandEnvelope
 from agent.infrastructure.config_manager import cfg
+from agent.transport.base import AckToken, TransportMessage
 
 
 logger = logging.getLogger(__name__)
 
-@dataclass(frozen=True)
+
+# ----------------------------------------------------------------------
+# Kafka commit reference
+# ----------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
 class KafkaCommitRef:
+    """Immutable reference to a Kafka record for manual commit."""
+
     topic: str
     partition: int
     offset: int
 
 
-@dataclass
-class _PendingKafkaMessage:
-    """Commands sharing one Kafka record and its commit handle."""
+# ----------------------------------------------------------------------
+# Lightweight command-id extraction
+# ----------------------------------------------------------------------
 
-    message: Any
-    command_ids: set[str] = field(default_factory=set)
-    acknowledged_command_ids: set[str] = field(default_factory=set)
+_CMD_ID_HEADER_KEYS = (
+    "command_id",
+    "command-id",
+    "commandid",
+    "corr_id",
+    "correlation_id",
+)
 
-    @property
-    def is_fully_acknowledged(self) -> bool:
-        return self.command_ids == self.acknowledged_command_ids
 
+def _extract_command_id_from_headers(
+    headers: Optional[Sequence[tuple[str, Optional[bytes]]]],
+) -> Optional[str]:
+    """Best-effort extraction of a command id from Kafka headers only.
+
+    The listener is intentionally thin: it does NOT parse the payload
+    to discover a command id. If the producer did not set a recognized
+    header, the caller falls back to a synthetic, offset-based id.
+    """
+    if not headers:
+        return None
+
+    for key, value in headers:
+        if key is None:
+            continue
+
+        normalized = str(key).strip().lower()
+        if normalized not in _CMD_ID_HEADER_KEYS:
+            continue
+
+        if value is None:
+            return None
+
+        if isinstance(value, bytes):
+            try:
+                decoded = value.decode("utf-8")
+            except UnicodeDecodeError:
+                decoded = value.decode("utf-8", errors="replace")
+        else:
+            decoded = str(value)
+
+        decoded = decoded.strip()
+        if decoded:
+            return decoded
+
+    return None
+
+
+def _build_synthetic_command_id(
+    topic: Optional[str],
+    partition: Optional[int],
+    offset: Optional[int],
+) -> str:
+    """Fallback command id derived from record coordinates.
+
+    This is NOT the canonical command id used by the application
+    layer; it is only a transport-level placeholder so that ack
+    tokens are never empty. The application layer will assign the
+    real command id during parsing.
+    """
+    return (
+        f"kafka:{topic or 'unknown'}:"
+        f"{partition if partition is not None else -1}:"
+        f"{offset if offset is not None else -1}"
+    )
+
+
+# ----------------------------------------------------------------------
+# Listener
+# ----------------------------------------------------------------------
 
 class KafkaListener:
-    """
-    Kafka command listener.
+    """Thin Kafka command listener.
 
-    Responsibilities:
-        - Create and manage Kafka Consumer.
-        - Subscribe to configured command topics.
-        - Hot-reload command topics.
-        - Poll Kafka messages.
-        - Extract correlation/auth/transport metadata.
-        - Parse JSON payloads with legacy literal fallback.
-        - Normalize single-command and multi-command payloads.
-        - Convert each command into CommandEnvelope.
-
-    This class intentionally does NOT:
-        - Execute Mt5_Manager methods.
-        - Import MetaTrader5.
-        - Dispatch business commands.
-        - Retry business operations.
-        - Commit offsets as part of business execution.
-        - Perform HTTP/Gateway communication.
+    Only polls Kafka and yields ``TransportMessage`` objects. Any
+    domain-level parsing, validation, or envelope construction is the
+    responsibility of the caller (application/core layer).
     """
 
     def __init__(
@@ -72,7 +144,6 @@ class KafkaListener:
         self._consumer: Optional[Consumer] = None
 
         self._subscribed_topics: list[str] = []
-        self._pending_by_command_id: dict[str, _PendingKafkaMessage] = {}
         self._pending_lock = threading.RLock()
 
         self._build_consumer_and_subscribe()
@@ -109,7 +180,8 @@ class KafkaListener:
         self._consumer = None
 
         with self._pending_lock:
-            self._pending_by_command_id.clear()
+            # No pending state retained at the transport level.
+            pass
 
         if consumer is not None:
             try:
@@ -124,18 +196,13 @@ class KafkaListener:
     @staticmethod
     def _servers_to_string(value: Any) -> str:
         if isinstance(value, (list, tuple)):
-            return ",".join(str(item).strip() for item in value if str(item).strip())
+            return ",".join(
+                str(item).strip() for item in value if str(item).strip()
+            )
 
         return str(value or "").strip()
 
-    def _get_config_value(
-        self,
-        key: str,
-        default: Any = None,
-    ) -> Any:
-        """
-        Read configuration using the existing dotted-access config manager.
-        """
+    def _get_config_value(self, key: str, default: Any = None) -> Any:
         try:
             value = self.config.get(key, default)
         except AttributeError:
@@ -144,60 +211,40 @@ class KafkaListener:
         return default if value is None else value
 
     def _build_consumer_config(self) -> dict[str, Any]:
-        """
-        Build confluent-kafka Consumer configuration.
-
-        Existing Kafka behavior is intentionally preserved.
-        """
-
         bootstrap_servers = self._get_config_value(
-            "kafka.bootstrap_servers",
-            [],
+            "kafka.bootstrap_servers", []
         )
-
         group_id = self._get_config_value(
-            "kafka.group_id",
-            "mt5-service",
+            "kafka.group_id", "mt5-service"
         )
-
         auto_offset_reset = self._get_config_value(
-            "kafka.consumer_auto_offset_reset",
-            "latest",
+            "kafka.consumer_auto_offset_reset", "latest"
         )
 
+        # Canonical AgentWorker owns the offset lifecycle. Never allow
+        # Kafka to advance offsets independently when the worker path
+        # is active.
         if self._get_config_value("app.use_agent_worker", True):
-            # Canonical AgentWorker processing owns the offset lifecycle.
-            # Never allow Kafka to advance offsets independently.
             enable_auto_commit = False
         else:
             enable_auto_commit = self._get_config_value(
-                "kafka.enable_auto_commit",
-                True,
+                "kafka.enable_auto_commit", True
             )
 
         session_timeout_ms = self._get_config_value(
-            "kafka.session_timeout_ms",
-            45000,
+            "kafka.session_timeout_ms", 45000
         )
-
         security_protocol = self._get_config_value(
-            "kafka.security_protocol",
-            "PLAINTEXT",
+            "kafka.security_protocol", "PLAINTEXT"
         )
-
         sasl_mechanism = self._get_config_value(
-            "kafka.sasl_mechanism",
-            "PLAIN",
+            "kafka.sasl_mechanism", "PLAIN"
         )
-
         sasl_username = self._get_config_value(
-            "kafka.sasl_username",
-            "",
+            "kafka.sasl_username", ""
         )
-
         sasl_password = self._get_config_value(
-            "kafka.sasl_password",
-            "",
+            "kafka.sasl_password", ""
         )
 
         consumer_config: dict[str, Any] = {
@@ -225,10 +272,7 @@ class KafkaListener:
     # ------------------------------------------------------------------
 
     def _current_command_topics(self) -> list[str]:
-        topics = self._get_config_value(
-            "kafka.topics.commands",
-            [],
-        )
+        topics = self._get_config_value("kafka.topics.commands", [])
 
         if isinstance(topics, str):
             topics = [topics]
@@ -243,19 +287,10 @@ class KafkaListener:
         ]
 
     def _build_consumer_and_subscribe(self) -> None:
-        """
-        Create a Kafka consumer and subscribe to command topics.
-
-        This is intentionally close to the old listener behavior.
-        """
-
-        if not bool(
-            self._get_config_value(
-                "kafka.enabled",
-                True,
+        if not bool(self._get_config_value("kafka.enabled", True)):
+            logger.info(
+                "Kafka is disabled; listener consumer will not start"
             )
-        ):
-            logger.info("Kafka is disabled; listener consumer will not start")
             return
 
         topics = self._current_command_topics()
@@ -271,11 +306,12 @@ class KafkaListener:
             try:
                 old_consumer.close()
             except Exception:
-                logger.exception("Failed to close previous Kafka consumer")
+                logger.exception(
+                    "Failed to close previous Kafka consumer"
+                )
 
         try:
             consumer_config = self._build_consumer_config()
-
             consumer = Consumer(consumer_config)
             consumer.subscribe(topics)
 
@@ -293,103 +329,36 @@ class KafkaListener:
 
     def _ensure_topics_up_to_date(self) -> None:
         consumer = self._consumer
-
         if consumer is None:
             return
 
         current_topics = self._current_command_topics()
-
         if current_topics == self._subscribed_topics:
             return
 
         try:
             consumer.subscribe(current_topics)
-
             self._subscribed_topics = list(current_topics)
-
             logger.info(
                 "Kafka command topics updated: %s",
                 self._subscribed_topics,
             )
-
         except KafkaException:
             logger.exception("Failed to update Kafka subscriptions")
 
     # ------------------------------------------------------------------
-    # Message parsing
+    # Headers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def parse_json_or_literal(value: Any) -> Any:
-        """
-        Parse JSON first.
-
-        Legacy compatibility:
-        If JSON parsing fails, ast.literal_eval() is attempted.
-        """
-
-        if isinstance(value, (dict, list)):
-            return value
-
-        if isinstance(value, bytes):
-            value = value.decode("utf-8", errors="replace")
-
-        if not isinstance(value, str):
-            return value
-
-        text = value.strip()
-
-        if not text:
-            return None
-
-        try:
-            return json.loads(text)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
-
-        try:
-            return ast.literal_eval(text)
-        except (ValueError, SyntaxError):
-            raise ValueError("Kafka message is neither valid JSON nor literal data")
-
-    @staticmethod
-    def _normalize_commands(payload: Any) -> list[dict[str, Any]]:
-        """
-        Normalize legacy payload formats.
-
-        Supported:
-            {"method": "...", "params": {...}}
-            [{"method": "...", ...}, {...}]
-        """
-
-        if isinstance(payload, dict):
-            return [payload]
-
-        if isinstance(payload, list):
-            commands: list[dict[str, Any]] = []
-
-            for item in payload:
-                if not isinstance(item, dict):
-                    raise TypeError(
-                        "Every command in a command list must be an object"
-                    )
-
-                commands.append(item)
-
-            return commands
-
-        raise TypeError(
-            "Kafka command payload must be an object or a list of objects"
-        )
-
-    # ------------------------------------------------------------------
-    # Kafka headers / metadata
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _headers_to_dict(
+    def _to_headers(
         headers: Optional[Sequence[tuple[str, Optional[bytes]]]],
     ) -> dict[str, Any]:
+        """Decode Kafka headers into a plain dict.
+
+        Values are decoded as UTF-8 when possible; otherwise the raw
+        bytes are preserved. Missing values become ``None``.
+        """
         result: dict[str, Any] = {}
 
         if not headers:
@@ -407,401 +376,224 @@ class KafkaListener:
 
         return result
 
-    @staticmethod
-    def _extract_correlation_id(
-        headers: Mapping[str, Any],
-        payload: Any,
-    ) -> str:
-        """
-        Preserve legacy correlation-id precedence:
-
-        1. headers.corr_id
-        2. headers.correlation_id
-        3. payload.corr_id
-        4. payload.correlation_id
-        5. generated UUID
-        """
-
-        corr_id = headers.get("corr_id")
-
-        if corr_id:
-            return str(corr_id)
-
-        corr_id = headers.get("correlation_id")
-
-        if corr_id:
-            return str(corr_id)
-
-        if isinstance(payload, dict):
-            corr_id = payload.get("corr_id")
-
-            if corr_id:
-                return str(corr_id)
-
-            corr_id = payload.get("correlation_id")
-
-            if corr_id:
-                return str(corr_id)
-
-        return str(uuid4())
-
-    # ------------------------------------------------------------------
-    # Envelope creation
-    # ------------------------------------------------------------------
-
-    def _build_envelope(
-        self,
-        command: Mapping[str, Any],
-        *,
-        correlation_id: str,
-        headers: Mapping[str, Any],
-        partition: Optional[int],
-        offset: Optional[int],
-        request_index: int,
-        target_class: Optional[str],
-        priority: int,
-    ) -> CommandEnvelope:
-        """
-        Convert one legacy command object into the canonical envelope.
-        """
-
-        metadata: dict[str, Any] = {
-            "transport": "kafka",
-            "request_index": request_index,
-            "headers": dict(headers),
-        }
-
-        if partition is not None:
-            metadata["partition"] = partition
-
-        if offset is not None:
-            metadata["offset"] = offset
-
-        source = dict(command)
-        source_metadata = source.get("metadata", {})
-        if source_metadata is None:
-            source_metadata = {}
-        if not isinstance(source_metadata, Mapping):
-            raise TypeError("command metadata must be an object")
-
-        source["metadata"] = {
-            **dict(source_metadata),
-            **metadata,
-        }
-
-        return CommandEnvelope.from_dict(
-            source,
-            default_target_class=target_class,
-            priority=priority,
-            correlation_id=correlation_id,
-        )
-
-    def parse_message(
-        self,
-        value: Any,
-        *,
-        headers: Optional[Sequence[tuple[str, Optional[bytes]]]] = None,
-        key: Any = None,
-        topic: Optional[str] = None,
-        partition: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> list[CommandEnvelope]:
-        """
-        Parse one Kafka message into one or more CommandEnvelope objects.
-
-        This method is deliberately transport-facing and contains no
-        business execution.
-        """
-
-        header_map = self._headers_to_dict(headers)
-
-        payload = self.parse_json_or_literal(value)
-
-        correlation_id = self._extract_correlation_id(
-            header_map,
-            payload,
-        )
-
-        commands = self._normalize_commands(payload)
-        target_class = self._decode_message_key(key)
-        priority = self._priority_from_topic(topic)
-
-        envelopes: list[CommandEnvelope] = []
-
-        for index, command in enumerate(commands):
-            envelope = self._build_envelope(
-                command,
-                correlation_id=correlation_id,
-                headers=header_map,
-                partition=partition,
-                offset=offset,
-                request_index=index,
-                target_class=target_class,
-                priority=priority,
-            )
-
-            envelopes.append(envelope)
-
-        return envelopes
-
-    @staticmethod
-    def _decode_message_key(key: Any) -> Optional[str]:
-        """Return the legacy Kafka message key as the dispatcher target."""
-        if key is None:
-            return None
-
-        if isinstance(key, bytes):
-            key = key.decode("utf-8", errors="replace")
-
-        value = str(key).strip()
-        return value or None
-
-    @staticmethod
-    def _priority_from_topic(topic: Optional[str]) -> int:
-        """Map the documented ``cmd.<client_id>.pN`` suffix to priority."""
-        if not topic:
-            return 1
-
-        suffix = str(topic).rsplit(".p", 1)
-        if len(suffix) != 2:
-            return 1
-
-        try:
-            priority = int(suffix[1])
-        except ValueError:
-            return 1
-
-        return priority if priority in (0, 1, 2) else 1
-
-    def _register_pending_message(
-        self,
-        message: Any,
-        envelopes: Sequence[CommandEnvelope],
-    ) -> None:
-        """Retain a record until all commands produced from it are acked."""
-        command_ids = {envelope.command_id for envelope in envelopes}
-        if not command_ids:
-            return
-
-        pending = _PendingKafkaMessage(
-            message=message,
-            command_ids=command_ids,
-        )
-
-        with self._pending_lock:
-            self._pending_by_command_id.update(
-                {command_id: pending for command_id in command_ids}
-            )
-
-    def commit_command(self, command_id: str) -> bool:
-        """Commit a manually managed Kafka record after every child command is acked.
-
-        ``Consumer.commit(message=...)`` commits the next offset for the
-        record.  A single legacy Kafka record may contain a command list, so
-        committing after only one child command would lose unacknowledged
-        siblings on a process crash.  The record is therefore committed only
-        when every generated ``CommandEnvelope`` has been acknowledged.
-        """
-        if not command_id:
-            raise ValueError("command_id must not be empty")
-
-        consumer = self._consumer
-        if consumer is None:
-            raise RuntimeError("Kafka consumer is unavailable")
-
-        with self._pending_lock:
-            pending = self._pending_by_command_id.get(command_id)
-            if pending is None:
-                raise KeyError(
-                    "No pending Kafka record is registered for command_id="
-                    f"{command_id!r}"
-                )
-
-            pending.acknowledged_command_ids.add(command_id)
-            if not pending.is_fully_acknowledged:
-                return False
-
-            try:
-                consumer.commit(message=pending.message, asynchronous=False)
-            except Exception:
-                pending.acknowledged_command_ids.discard(command_id)
-                logger.exception(
-                    "Kafka manual commit failed for command_id=%s",
-                    command_id,
-                )
-                raise
-
-            for pending_command_id in pending.command_ids:
-                self._pending_by_command_id.pop(pending_command_id, None)
-
-        logger.debug("Kafka record committed for command_id=%s", command_id)
-        return True
-
-    def get_commit_ref(self, command_id: str) -> Optional[KafkaCommitRef]:
-        """
-        Return immutable commit reference for a pending command.
-        Useful for transport-level tracking/diagnostics.
-        """
-        with self._pending_lock:
-            pending = self._pending_by_command_id.get(command_id)
-            if pending is None:
-                return None
-
-            msg = pending.message
-            try:
-                topic = msg.topic()
-                partition = int(msg.partition())
-                offset = int(msg.offset())
-            except Exception:
-                logger.debug(
-                    "Failed to build commit ref for command_id=%s",
-                    command_id,
-                    exc_info=True,
-                )
-                return None
-
-            return KafkaCommitRef(
-                topic=str(topic),
-                partition=partition,
-                offset=offset,
-            )
-
-    def related_command_ids(self, command_id: str) -> set[str]:
-        """Return the command ids produced from the same pending record."""
-        with self._pending_lock:
-            pending = self._pending_by_command_id.get(command_id)
-            if pending is None:
-                raise KeyError(
-                    "No pending Kafka record is registered for command_id="
-                    f"{command_id!r}"
-                )
-            return set(pending.command_ids)
-
-    def release_pending_record(self, command_id: str) -> None:
-        """Discard a retained record when no application commit is needed."""
-        with self._pending_lock:
-            pending = self._pending_by_command_id.get(command_id)
-            if pending is None:
-                return
-
-            for pending_command_id in pending.command_ids:
-                self._pending_by_command_id.pop(pending_command_id, None)
-
     # ------------------------------------------------------------------
     # Polling
     # ------------------------------------------------------------------
 
-    def poll_commands(
+    def poll_messages(
         self,
-        timeout_sec: float = 1.0,
-    ) -> list[CommandEnvelope]:
-        """
-        Poll Kafka and return normalized CommandEnvelope objects.
+        timeout_ms: int = 1000,
+        max_records: int = 1,
+    ) -> list[TransportMessage]:
+        """Poll Kafka and return thin ``TransportMessage`` objects.
 
-        No command is executed here.
+        No parsing or validation is performed here. Payload is passed
+        through as-is. Command-id extraction is best-effort and only
+        consults Kafka headers; a synthetic offset-based id is used
+        when no recognized header is present.
         """
-
         consumer = self._consumer
-
         if consumer is None:
             return []
 
         self._ensure_topics_up_to_date()
 
         try:
-            message = consumer.poll(timeout=float(timeout_sec))
-
+            records = consumer.consume(
+                num_messages=int(max_records),
+                timeout=float(timeout_ms) / 1000.0,
+            )
         except KafkaException:
             logger.exception("Kafka poll failed")
             return []
-
         except Exception:
             logger.exception("Unexpected Kafka polling error")
             return []
 
-        if message is None:
+        if not records:
             return []
 
-        if message.error():
-            error = message.error()
+        out: list[TransportMessage] = []
 
-            if error.code() == KafkaError._PARTITION_EOF:
-                return []
+        for rec in records:
+            if rec is None:
+                continue
 
-            logger.error(
-                "Kafka consumer error: %s",
-                error,
+            error = rec.error()
+            if error is not None:
+                if error.code() == KafkaError._PARTITION_EOF:
+                    continue
+
+                logger.error("Kafka consumer error: %s", error)
+                continue
+
+            topic = rec.topic()
+            partition = rec.partition()
+            offset = rec.offset()
+
+            headers = self._to_headers(rec.headers())
+            raw_key = rec.key()
+            key = (
+                raw_key.decode("utf-8", errors="replace")
+                if isinstance(raw_key, bytes)
+                else raw_key
             )
 
-            return []
+            command_id = (
+                _extract_command_id_from_headers(rec.headers())
+                or _build_synthetic_command_id(topic, partition, offset)
+            )
+
+            cref = KafkaCommitRef(
+                topic=str(topic),
+                partition=int(partition),
+                offset=int(offset),
+            )
+
+            token = AckToken(
+                command_id=command_id,
+                transport_ref=cref,
+                topic=str(topic),
+                partition=int(partition),
+                offset=int(offset),
+            )
+
+            out.append(
+                TransportMessage(
+                    payload=rec.value(),
+                    key=key,
+                    headers=headers,
+                    timestamp_ms=getattr(rec, "timestamp", lambda: None)()[0]
+                    if callable(getattr(rec, "timestamp", None))
+                    else None,
+                    ack_token=token,
+                )
+            )
+
+        return out
+
+    # ------------------------------------------------------------------
+    # Acknowledgement
+    # ------------------------------------------------------------------
+
+    def ack(
+        self,
+        token: AckToken,
+        status: str = "SUCCESS",
+    ) -> None:
+        """Commit the Kafka record referenced by ``token``.
+
+        Commit semantics:
+        - Only records with a ``KafkaCommitRef`` in ``transport_ref``
+          can be committed.
+        - Commit is synchronous (``asynchronous=False``) so the caller
+          can rely on commit completion before proceeding.
+        """
+        if token is None:
+            raise ValueError("AckToken must not be None")
+
+        ref = token.transport_ref
+        if not isinstance(ref, KafkaCommitRef):
+            # Transports without a Kafka ref (e.g. fake/test) simply
+            # no-op. This keeps the interface uniform.
+            logger.debug(
+                "ack() called without a KafkaCommitRef for command_id=%s "
+                "(status=%s); no commit performed",
+                token.command_id,
+                status,
+            )
+            return
+
+        consumer = self._consumer
+        if consumer is None:
+            raise RuntimeError("Kafka consumer is unavailable")
 
         try:
-            envelopes = self.parse_message(
-                message.value(),
-                headers=message.headers(),
-                key=message.key(),
-                topic=message.topic(),
-                partition=message.partition(),
-                offset=message.offset(),
+            consumer.commit(
+                offsets=[
+                    _topic_partition_offset(ref.topic, ref.partition, ref.offset)
+                ],
+                asynchronous=False,
             )
-
-            self._register_pending_message(message, envelopes)
-
-            logger.debug(
-                "Kafka message normalized: topic=%s partition=%s offset=%s "
-                "commands=%s",
-                message.topic(),
-                message.partition(),
-                message.offset(),
-                len(envelopes),
-            )
-
-            return envelopes
-
         except Exception:
             logger.exception(
-                "Failed to parse Kafka command: topic=%s partition=%s offset=%s",
-                message.topic(),
-                message.partition(),
-                message.offset(),
+                "Kafka manual commit failed for command_id=%s "
+                "topic=%s partition=%s offset=%s",
+                token.command_id,
+                ref.topic,
+                ref.partition,
+                ref.offset,
             )
+            raise
 
-            return []
+        logger.debug(
+            "Kafka record committed for command_id=%s topic=%s "
+            "partition=%s offset=%s",
+            token.command_id,
+            ref.topic,
+            ref.partition,
+            ref.offset,
+        )
 
-    # ------------------------------------------------------------------
-    # Compatibility listen loop
-    # ------------------------------------------------------------------
+    def nack(
+        self,
+        token: AckToken,
+        reason: str,
+        retryable: bool = True,
+    ) -> None:
+        """Negatively acknowledge a Kafka record.
 
-    def listen(self) -> None:
+        The transport does NOT commit the offset. It logs the reason
+        and, if the record is retryable, relies on the consumer's
+        ``auto.offset.reset`` / redelivery policy. Non-retryable
+        nacks are logged but still not committed by default, so the
+        record may be redelivered until an explicit policy is added
+        (e.g. DLQ).
         """
-        Legacy-compatible blocking listen loop.
+        if token is None:
+            raise ValueError("AckToken must not be None")
 
-        IMPORTANT:
-        This method currently only polls and logs normalized commands.
-        Execution will be wired through CommandExecutor in the later
-        worker/transport integration phase.
-        """
+        safe_reason = _sanitize_reason(reason)
 
-        self.start()
+        logger.warning(
+            "nack received for command_id=%s retryable=%s reason=%s",
+            token.command_id,
+            retryable,
+            safe_reason,
+        )
 
-        try:
-            while self.running and not self._stop_event.is_set():
-                envelopes = self.poll_commands(timeout_sec=1.0)
+        # No offset movement here on purpose. Commit/redelivery policy
+        # is owned by a higher layer.
 
-                for envelope in envelopes:
-                    logger.debug(
-                        "Received command: command_id=%s "
-                        "target=%s.%s correlation_id=%s",
-                        envelope.command_id,
-                        envelope.target_class,
-                        envelope.target_method,
-                        envelope.correlation_id,
-                    )
 
-        finally:
-            self.close()
+# ----------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------
+
+def _topic_partition_offset(
+    topic: str,
+    partition: int,
+    offset: int,
+) -> Any:
+    """Build a ``TopicPartition`` lazily to avoid import-time coupling."""
+    from confluent_kafka import TopicPartition
+
+    return TopicPartition(topic, partition, offset + 1)
+
+
+_MAX_REASON_LEN = 256
+
+
+def _sanitize_reason(reason: Any) -> str:
+    """Truncate and strip a reason string for safe logging."""
+    if reason is None:
+        return ""
+
+    text = str(reason)
+    if len(text) > _MAX_REASON_LEN:
+        text = text[: _MAX_REASON_LEN - 3] + "..."
+
+    return text
 
 
 __all__ = ["KafkaListener", "KafkaCommitRef"]
-
-

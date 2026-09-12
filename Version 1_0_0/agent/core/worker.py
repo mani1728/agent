@@ -1,6 +1,27 @@
 # Path: Version 1_0_0/agent/core/worker.py
 
-"""Canonical Agent worker lifecycle and execution pipeline."""
+"""Canonical Agent worker: single orchestrator for the execution pipeline.
+
+Canonical flow (P0/P1):
+
+    poll_messages
+    → parse (CommandParser)
+    → idempotency check
+    → dispatch (Dispatcher with central authorizer)
+    → publish response
+    → ack / nack per Ack Policy Matrix
+
+Design notes
+------------
+- The worker is the ONLY component allowed to call ``transport.ack``
+  and ``transport.nack``. No one else should move offsets.
+- The worker never calls ``transport.ack`` unless the response has
+  been successfully published (or the command is a safe duplicate).
+- Parsing lives in ``CommandParser`` (core), not in the transport.
+- Authorization is enforced by the ``Dispatcher`` (via ``require``).
+- The worker classifies exceptions and applies the Ack Policy Matrix
+  defined below.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +32,11 @@ from typing import Any, Mapping, Optional
 
 from agent.contracts.command import CommandEnvelope
 from agent.contracts.response import ResponseEnvelope
-from agent.core.command_executor import CommandExecutor
+from agent.core.command_parser import CommandParser
+from agent.core.dispatcher import (
+    Dispatcher,
+    UnauthorizedCommandError,
+)
 from agent.reliability.backoff import BackoffConfig, ExponentialBackoff
 from agent.reliability.circuit_breaker import (
     CircuitBreaker,
@@ -19,9 +44,9 @@ from agent.reliability.circuit_breaker import (
 )
 from agent.reliability.idempotency import (
     IdempotencyError,
-    IdempotencyStore,
     IdempotencyManager,
     IdempotencyState,
+    IdempotencyStore,
     fingerprint_payload,
 )
 from agent.reliability.retry import (
@@ -29,14 +54,35 @@ from agent.reliability.retry import (
     RetryExecutor,
     RetryPolicy,
 )
-from agent.transport.base import AckToken, ITransportClient
-
+from agent.transport.base import AckToken, ITransportClient, TransportMessage
+from agent.core.exceptions import (
+    ValidationError,
+    RetryableExternalError,
+)
 
 logger = logging.getLogger(__name__)
 
 
+# ======================================================================
+# Exceptions
+# ======================================================================
+
 class WorkerError(Exception):
     """Base exception for worker-related failures."""
+
+
+class ValidationError(WorkerError):
+    """Raised when a transport message cannot be parsed into a command.
+
+    Permanent failure. Must NOT be retried.
+    """
+
+
+class RetryableExternalError(WorkerError):
+    """Marker for transient external failures (network, broker, adapter).
+
+    Retryable. Must NOT commit the offset until successful.
+    """
 
 
 class WorkerState:
@@ -56,15 +102,38 @@ class _TransientDeliveryError(WorkerError):
     """Marker for retryable transport delivery failures."""
 
 
+# ======================================================================
+# Ack Policy Matrix
+# ======================================================================
+
+# Canonical failure classification and the corresponding ack/nack action.
+#
+#   classification               | action                    | commit?
+#   -----------------------------|---------------------------|---------
+#   success                      | ack(status=SUCCESS)       | yes
+#   duplicate (idempotency hit)  | ack(status=DUPLICATE)     | yes
+#   authorization failure        | nack(retryable=False)     | yes (DLQ)
+#   validation failure           | nack(retryable=False)     | yes (DLQ)
+#   malformed payload            | nack(retryable=False)     | yes (DLQ)
+#   transient external failure   | nack(retryable=True)      | no
+#   unknown failure              | per config                | per config
+#
+# "commit" here means "advance the offset", which for the Kafka
+# transport is performed by ``transport.ack`` and NOT by
+# ``transport.nack`` for retryable failures.
+#
+# Non-retryable failures that MUST be committed (to avoid endless
+# redelivery) rely on the transport's DLQ hook (see transport.nack).
+
+
+# ======================================================================
+# Worker
+# ======================================================================
+
 class AgentWorker:
-    """
-    Transport-agnostic Agent Worker with runtime reliability hooks.
+    """Transport-agnostic Agent Worker with runtime reliability hooks."""
 
-    Canonical flow:
-        poll -> execute -> publish response -> ack
-    """
-
-    _DEFAULT_RELIABILITY = {
+    _DEFAULT_RELIABILITY: dict[str, Any] = {
         "command_retry": {
             "max_attempts": 3,
             "base_delay_seconds": 0.05,
@@ -80,6 +149,7 @@ class AgentWorker:
             "jitter_ratio": 0.0,
         },
         "command_retry_exceptions": (
+            RetryableExternalError,
             TimeoutError,
             ConnectionError,
             OSError,
@@ -93,20 +163,28 @@ class AgentWorker:
             "recovery_timeout_seconds": 30.0,
             "success_threshold": 1,
         },
+        "ack_on_unknown_error": False,
     }
 
     _DEFAULT_TRANSIENT_COMMAND_EXCEPTIONS: tuple[type[BaseException], ...] = (
+        RetryableExternalError,
         TimeoutError,
         ConnectionError,
         OSError,
     )
 
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
     def __init__(
         self,
-        command_executor: CommandExecutor,
+        dispatcher: Dispatcher,
         transport: ITransportClient | None = None,
         *,
+        parser: CommandParser | None = None,
         poll_timeout_sec: float = 1.0,
+        poll_max_records: int = 1,
         on_start: Callable[[], None] | None = None,
         on_stop: Callable[[], None] | None = None,
         reliability_config: Optional[Mapping[str, Any]] = None,
@@ -117,9 +195,9 @@ class AgentWorker:
         circuit_breaker: CircuitBreaker | None = None,
         close_idempotency_store: bool = False,
     ) -> None:
-        if not isinstance(command_executor, CommandExecutor):
+        if not isinstance(dispatcher, Dispatcher):
             raise TypeError(
-                "command_executor must be a CommandExecutor instance."
+                "dispatcher must be a Dispatcher instance."
             )
 
         if transport is not None and not isinstance(
@@ -135,24 +213,41 @@ class AgentWorker:
                 "poll_timeout_sec must be greater than zero."
             )
 
-        self._command_executor = command_executor
+        if poll_max_records <= 0:
+            raise ValueError(
+                "poll_max_records must be greater than zero."
+            )
+
+        self._dispatcher = dispatcher
         self._transport = transport
+        self._parser = parser or CommandParser()
+
         self._poll_timeout_sec = float(poll_timeout_sec)
+        self._poll_timeout_ms = int(self._poll_timeout_sec * 1000)
+        self._poll_max_records = int(poll_max_records)
 
         self._on_start = on_start
         self._on_stop = on_stop
 
+        # --------------------------------------------------------------
+        # Reliability config
+        # --------------------------------------------------------------
         self._reliability_config = self._normalize_reliability_config(
             reliability_config or {}
         )
 
+        self._ack_on_unknown_error = bool(
+            self._reliability_config.get("ack_on_unknown_error", False)
+        )
+
+        # --------------------------------------------------------------
+        # Retry executors
+        # --------------------------------------------------------------
         self._retry_executor = (
             retry_executor
             if retry_executor is not None
             else self._build_retry_executor(
-                section=self._reliability_section(
-                    "command_retry"
-                ),
+                section=self._reliability_section("command_retry"),
                 retry_exceptions=self._resolve_retry_exceptions(
                     self._reliability_config.get(
                         "command_retry_exceptions",
@@ -167,9 +262,7 @@ class AgentWorker:
             delivery_retry_executor
             if delivery_retry_executor is not None
             else self._build_retry_executor(
-                section=self._reliability_section(
-                    "delivery_retry"
-                ),
+                section=self._reliability_section("delivery_retry"),
                 retry_exceptions=self._resolve_retry_exceptions(
                     self._reliability_config.get(
                         "delivery_retry_exceptions",
@@ -180,6 +273,9 @@ class AgentWorker:
             )
         )
 
+        # --------------------------------------------------------------
+        # Idempotency
+        # --------------------------------------------------------------
         self._idempotency_manager = (
             idempotency_manager
             if idempotency_manager is not None
@@ -196,53 +292,57 @@ class AgentWorker:
             and idempotency_manager is None
         )
 
-        self._circuit_breaker = circuit_breaker or self._build_circuit_breaker()
+        # --------------------------------------------------------------
+        # Circuit breaker
+        # --------------------------------------------------------------
+        self._circuit_breaker = (
+            circuit_breaker
+            if circuit_breaker is not None
+            else self._build_circuit_breaker()
+        )
 
+        # --------------------------------------------------------------
+        # Lifecycle state
+        # --------------------------------------------------------------
         self._state = WorkerState.CREATED
         self._stop_event = threading.Event()
         self._state_lock = threading.RLock()
 
-    @property
-    def command_executor(self) -> CommandExecutor:
-        """Return the configured command executor."""
+    # ------------------------------------------------------------------
+    # Public properties
+    # ------------------------------------------------------------------
 
-        return self._command_executor
+    @property
+    def dispatcher(self) -> Dispatcher:
+        return self._dispatcher
 
     @property
     def transport(self) -> ITransportClient | None:
-        """Return the configured transport, if any."""
-
         return self._transport
 
     @property
-    def state(self) -> str:
-        """Return the current worker state."""
+    def parser(self) -> CommandParser:
+        return self._parser
 
+    @property
+    def state(self) -> str:
         with self._state_lock:
             return self._state
 
     @property
     def is_running(self) -> bool:
-        """Return True when the worker is running."""
-
         return self.state == WorkerState.RUNNING
 
     @property
     def is_stopping(self) -> bool:
-        """Return True when stopping."""
-
         return self.state == WorkerState.STOPPING
 
     @property
     def is_stopped(self) -> bool:
-        """Return True when stopped."""
-
         return self.state == WorkerState.STOPPED
 
     @property
     def stop_event(self) -> threading.Event:
-        """Return the worker stop event."""
-
         return self._stop_event
 
     # ------------------------------------------------------------------
@@ -250,8 +350,6 @@ class AgentWorker:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Start worker lifecycle."""
-
         with self._state_lock:
             if self._state == WorkerState.RUNNING:
                 return
@@ -281,8 +379,6 @@ class AgentWorker:
         logger.info("Agent worker started")
 
     def stop(self) -> None:
-        """Request worker shutdown."""
-
         with self._state_lock:
             if self._state == WorkerState.STOPPED:
                 return
@@ -322,12 +418,10 @@ class AgentWorker:
             return
 
         store = self._idempotency_store
-
         if store is None:
             return
 
         close_method = getattr(store, "close", None)
-
         if callable(close_method):
             try:
                 close_method()
@@ -341,32 +435,114 @@ class AgentWorker:
     # Main loop
     # ------------------------------------------------------------------
 
-    def run_once(self) -> int:
-        """Poll once and process every command returned by that poll."""
+    def execute_one_command(self) -> bool:
+        """Poll one message, parse, dispatch, and apply Ack Policy.
+
+        Returns
+        -------
+        bool
+            True if a message was processed (whether it was acked or
+            nacked), False if the poll returned no messages or the
+            worker is stopping.
+        """
         if not self.is_running:
             raise WorkerError("Worker is not running.")
 
         if self._transport is None:
             raise WorkerError("Worker has no transport configured.")
 
-        commands = self._transport.poll_commands(
-            timeout_sec=self._poll_timeout_sec,
-        )
+        # --------------------------------------------------------------
+        # 1. Poll
+        # --------------------------------------------------------------
+        try:
+            messages = self._transport.poll_messages(
+                timeout_ms=self._poll_timeout_ms,
+                max_records=self._poll_max_records,
+            )
+        except Exception:
+            logger.exception("Transport poll failed; continuing loop")
+            return False
 
+        if not messages:
+            return False
+
+        # Process the first message only (execute_one semantics).
+        # Batch semantics: caller may loop calling execute_one_command.
+        msg: TransportMessage = messages[0]
+        token: AckToken | None = msg.ack_token
+
+        if token is None:
+            logger.error(
+                "Transport message has no AckToken; cannot ack/nack safely"
+            )
+            return False
+
+        # --------------------------------------------------------------
+        # 2. Parse
+        # --------------------------------------------------------------
+        try:
+            commands = self._parser.parse(msg)
+        except Exception as exc:
+            self._handle_validation_failure(token, exc)
+            return True
+
+        if not commands:
+            # Empty payload normalized to no commands: treat as
+            # malformed but non-retryable.
+            self._handle_validation_failure(
+                token,
+                ValueError("Transport message produced no commands"),
+            )
+            return True
+
+        # --------------------------------------------------------------
+        # 3. Process each parsed command (usually one)
+        # --------------------------------------------------------------
         for command in commands:
             try:
-                self._process_command(command)
+                handled = self._process_one_command(command, token)
             except _WorkerStopRequested:
-                logger.debug(
-                    "Worker stop requested while processing command"
-                )
+                logger.debug("Worker stop requested during command processing")
+                return True
+
+            if not handled:
+                # The command was nacked retryable: stop processing this
+                # record to avoid double-acking siblings.
+                return True
+
+        return True
+
+    def run_once(self) -> int:
+        """Poll once and process every message returned by that poll."""
+        if not self.is_running:
+            raise WorkerError("Worker is not running.")
+
+        if self._transport is None:
+            raise WorkerError("Worker has no transport configured.")
+
+        try:
+            messages = self._transport.poll_messages(
+                timeout_ms=self._poll_timeout_ms,
+                max_records=self._poll_max_records,
+            )
+        except Exception:
+            logger.exception("Transport poll failed; continuing loop")
+            return 0
+
+        count = 0
+        for msg in messages:
+            count += 1
+            try:
+                self._process_message(msg)
+            except _WorkerStopRequested:
+                logger.debug("Worker stop requested while processing message")
                 break
             except Exception:
                 logger.exception(
-                    "Unexpected command processing error; continuing worker loop"
+                    "Unexpected message processing error; continuing loop"
                 )
 
-        return len(commands)
+        return count
 
     def run(self) -> None:
         """Run the polling loop until stop is requested."""
@@ -375,185 +551,251 @@ class AgentWorker:
 
         try:
             while not self._stop_event.is_set():
-                self.run_once()
+                self.execute_one_command()
         finally:
             self.stop()
 
     # ------------------------------------------------------------------
-    # Command execution
+    # Core processing
     # ------------------------------------------------------------------
 
-    def execute(
-        self,
-        command: CommandEnvelope,
-    ) -> ResponseEnvelope:
-        """Execute a command through the configured CommandExecutor."""
-
-        if not isinstance(command, CommandEnvelope):
-            raise TypeError("execute() expects a CommandEnvelope instance.")
-
-        if not self.is_running:
-            raise WorkerError("Worker is not running.")
-
-        return self._command_executor.execute(command)
-
-    def execute_raw(self, command: CommandEnvelope) -> ResponseEnvelope:
-        """Compatibility wrapper."""
-
-        return self.execute(command)
-
-    def _process_command(
-        self,
-        command: CommandEnvelope,
-    ) -> None:
-        """Execute, publish, then acknowledge one canonical command."""
-        if not isinstance(command, CommandEnvelope):
-            logger.error("Transport returned a non-CommandEnvelope command")
+    def _process_message(self, msg: TransportMessage) -> None:
+        """Parse and process all commands in a single transport message."""
+        token = msg.ack_token
+        if token is None:
+            logger.error(
+                "Transport message has no AckToken; cannot ack/nack safely"
+            )
             return
 
-        execution_failed = False
-
         try:
-            response, allow_ack = self._process_command_outcome(command)
+            commands = self._parser.parse(msg)
+        except Exception as exc:
+            self._handle_validation_failure(token, exc)
+            return
+
+        if not commands:
+            self._handle_validation_failure(
+                token,
+                ValueError("Transport message produced no commands"),
+            )
+            return
+
+        for command in commands:
+            self._process_one_command(command, token)
+
+    def _process_one_command(
+        self,
+        command: CommandEnvelope,
+        token: AckToken,
+    ) -> bool:
+        """Execute one command and apply the Ack Policy Matrix.
+
+        Returns
+        -------
+        bool
+            True if the message was acked or nacked (final), False if
+            the message should not be further processed (e.g. transient
+            nack: caller should stop and let it redeliver).
+        """
+        # --------------------------------------------------------------
+        # 1. Idempotency check
+        # --------------------------------------------------------------
+        try:
+            duplicate_outcome = self._check_idempotency(command)
         except _WorkerStopRequested:
             raise
         except Exception:
-            execution_failed = True
-            allow_ack = False
             logger.exception(
-                "Command execution escaped worker boundary: command_id=%s",
+                "Idempotency check failed: command_id=%s",
                 command.command_id,
             )
-            response = ResponseEnvelope.error(
-                correlation_id=command.correlation_id,
-                error_code="WORKER_EXECUTION_ERROR",
-                error_message="Command execution failed.",
-                metadata={
-                    "target_class": command.target_class,
-                    "target_method": command.target_method,
-                },
-            )
+            self._nack_retryable(token, "idempotency check failure")
+            return False
 
-        try:
-            sent = bool(
-                self._transport
-                and self._publish_with_retry(
-                    response=response,
-                    command_id=command.command_id,
+        if duplicate_outcome is not None:
+            cached_response, was_in_progress = duplicate_outcome
+
+            if was_in_progress:
+                # Duplicate is currently executing elsewhere: do NOT
+                # commit; let it redeliver.
+                self._nack_retryable(
+                    token, "duplicate command is in progress"
                 )
-            )
+                return False
+
+            # Completed duplicate: publish cached response, then ack.
+            if not self._publish_with_retry(
+                response=cached_response,
+                command_id=command.command_id,
+            ):
+                self._nack_retryable(
+                    token, "failed to publish cached response"
+                )
+                return False
+
+            self._ack(token, status="DUPLICATE")
+            return True
+
+        # --------------------------------------------------------------
+        # 2. Dispatch (authorizer runs inside dispatcher)
+        # --------------------------------------------------------------
+        try:
+            response = self._execute_with_retry(command)
+        except UnauthorizedCommandError as exc:
+            self._nack_non_retryable(token, str(exc))
+            return True
+        except ValidationError as exc:
+            self._nack_non_retryable(token, str(exc))
+            return True
+        except RetryableExternalError as exc:
+            self._nack_retryable(token, str(exc))
+            return False
         except _WorkerStopRequested:
-            return
-        except Exception:
-            logger.exception(
-                "Response publication failed: command_id=%s",
-                command.command_id,
-            )
-            return
+            raise
+        except Exception as exc:
+            self._handle_unknown_failure(token, exc)
+            return True
 
-        if not sent:
-            logger.error(
-                "Response was not accepted by transport: command_id=%s",
-                command.command_id,
-            )
-            return
-
-        if execution_failed or not allow_ack:
-            if execution_failed:
-                logger.warning(
-                    "Command execution failed; response published but command will not be acknowledged: command_id=%s",
-                    command.command_id,
-                )
-            return
-
+        # --------------------------------------------------------------
+        # 3. Mark idempotency complete
+        # --------------------------------------------------------------
         try:
-            if self._transport is not None:
-                ack_token = AckToken(
-                    command_id=command.command_id,
-                    ref=getattr(command, "transport_ref", None),
-                )
-                self._transport.ack_command(
-                    command.command_id,
-                    ack_token=ack_token,
-                )
+            self._idempotency_manager.complete(
+                command.command_id,
+                result=response,
+            )
         except Exception:
             logger.exception(
-                "Command acknowledgement failed: command_id=%s",
+                "Failed to record successful outcome: command_id=%s",
                 command.command_id,
             )
+            # We already have a valid response; do not lose it. The
+            # idempotency store will treat the next redelivery as
+            # unknown, which is safe (idempotent replay).
+            self._nack_retryable(
+                token, "idempotency store write failure"
+            )
+            return False
 
-    def _process_command_outcome(
+        # --------------------------------------------------------------
+        # 4. Publish response
+        # --------------------------------------------------------------
+        if not self._publish_with_retry(
+            response=response,
+            command_id=command.command_id,
+        ):
+            self._nack_retryable(
+                token, "response publish failed"
+            )
+            return False
+
+        # --------------------------------------------------------------
+        # 5. Ack
+        # --------------------------------------------------------------
+        self._ack(token, status="SUCCESS")
+        return True
+
+    # ------------------------------------------------------------------
+    # Idempotency
+    # ------------------------------------------------------------------
+
+    def _check_idempotency(
         self,
         command: CommandEnvelope,
-    ) -> tuple[ResponseEnvelope, bool]:
-        """
-        Return response and whether transport ack is allowed.
-        """
+    ) -> Optional[tuple[ResponseEnvelope, bool]]:
+        """Return (cached_response, was_in_progress) or None if new."""
         key = command.command_id
         fingerprint = fingerprint_payload(command.to_dict())
 
-        replay = self._acquire_idempotent_outcome(
-            key=key,
-            fingerprint=fingerprint,
-            command=command,
-        )
+        while True:
+            try:
+                result = self._idempotency_manager.store.begin(
+                    key,
+                    fingerprint=fingerprint,
+                )
+            except IdempotencyError:
+                cached = self._idempotency_manager.get(key)
+                if cached is None:
+                    raise WorkerError(
+                        "idempotency slot is not recoverable"
+                    )
+            else:
+                if result.accepted:
+                    return None
+                cached = result.record
 
-        if replay is not None:
-            return replay
+            if cached.state == IdempotencyState.IN_PROGRESS:
+                return (
+                    ResponseEnvelope.error(
+                        correlation_id=command.correlation_id,
+                        error_code="COMMAND_IN_PROGRESS",
+                        error_message=(
+                            "Duplicate command is currently being executed."
+                        ),
+                    ),
+                    True,
+                )
 
-        def execute_once() -> ResponseEnvelope:
-            return self._execute_command(command)
+            if cached.state == IdempotencyState.COMPLETED:
+                cached_result = cached.result
+                if isinstance(cached_result, ResponseEnvelope):
+                    return cached_result, False
+                return (
+                    ResponseEnvelope.error(
+                        correlation_id=command.correlation_id,
+                        error_code="COMMAND_IDEMPOTENCY_INVALID_STATE",
+                        error_message=(
+                            "Completed command has no cached response."
+                        ),
+                    ),
+                    False,
+                )
 
-        try:
-            result = self._retry_executor.execute(
-                execute_once,
+            if cached.state == IdempotencyState.FAILED:
+                removed = self._idempotency_manager.remove(key)
+                if removed:
+                    continue
+                raise WorkerError(
+                    "failed command can no longer be retried"
+                )
+
+            raise WorkerError(
+                f"Unknown idempotency state for command_id={key!r}"
             )
-            response = result.result
-        except Exception as exc:
-            self._handle_execution_failure(key, exc)
-            raise
 
-        self._idempotency_manager.complete(
-            key,
-            result=response,
-        )
-        return response, True
+    # ------------------------------------------------------------------
+    # Execution
+    # ------------------------------------------------------------------
 
-    @staticmethod
-    def _unwrap_retry_failure(exc: BaseException) -> BaseException:
-        """
-        Convert retry-wrapper errors into their terminal cause when available.
-
-        RetryExecutor wraps only after final failed attempt, while other
-        wrappers (such as custom transports) may nest exceptions.
-        """
-        candidate = exc
-
-        if hasattr(candidate, "last_exception"):
-            nested = getattr(candidate, "last_exception")
-
-            if isinstance(nested, BaseException):
-                return nested
-
-        return candidate
-
-    def _execute_command(
+    def _execute_with_retry(
         self,
         command: CommandEnvelope,
     ) -> ResponseEnvelope:
-        if self._circuit_breaker is None:
-            return self._command_executor.execute(command)
+        """Execute with bounded retry, respecting the circuit breaker."""
 
-        return self._circuit_breaker.execute(
-            self._command_executor.execute,
-            command,
-        )
+        def execute_once() -> ResponseEnvelope:
+            if self._circuit_breaker is None:
+                return self._dispatcher.dispatch(command)
+            return self._circuit_breaker.execute(
+                self._dispatcher.dispatch,
+                command,
+            )
+
+        try:
+            result = self._retry_executor.execute(execute_once)
+        except Exception as exc:
+            self._handle_execution_failure(command.command_id, exc)
+            raise
+
+        return result.result
 
     def _handle_execution_failure(
         self,
         command_id: str,
         exc: BaseException,
     ) -> None:
+        """Record a failed execution in the idempotency store."""
         cause = self._unwrap_retry_failure(exc)
 
         try:
@@ -572,76 +814,22 @@ class AgentWorker:
             self._idempotency_manager.remove(command_id)
         except Exception:
             logger.debug(
-                "Failed to clear idempotency state after execution failure: command_id=%s",
+                "Failed to clear idempotency state after failure: command_id=%s",
                 command_id,
                 exc_info=True,
             )
 
-    def _acquire_idempotent_outcome(
-        self,
-        *,
-        key: str,
-        fingerprint: str,
-        command: CommandEnvelope,
-    ) -> tuple[ResponseEnvelope, bool] | None:
-        while True:
-            try:
-                result = self._idempotency_manager.store.begin(
-                    key,
-                    fingerprint=fingerprint,
-                )
+    @staticmethod
+    def _unwrap_retry_failure(exc: BaseException) -> BaseException:
+        """Return the terminal cause if a retry wrapper nests one."""
+        nested = getattr(exc, "last_exception", None)
+        if isinstance(nested, BaseException):
+            return nested
+        return exc
 
-                if result.accepted:
-                    return None
-
-                cached = result.record
-
-            except IdempotencyError:
-                cached = self._idempotency_manager.get(key)
-
-                if cached is None:
-                    raise WorkerError(
-                        "idempotency slot is not recoverable"
-                    )
-
-            if cached.state == IdempotencyState.IN_PROGRESS:
-                return (
-                    ResponseEnvelope.error(
-                        correlation_id=command.correlation_id,
-                        error_code="COMMAND_IN_PROGRESS",
-                        error_message="Duplicate command is currently being executed.",
-                    ),
-                    False,
-                )
-
-            if cached.state == IdempotencyState.COMPLETED:
-                cached_result = cached.result
-
-                if isinstance(cached_result, ResponseEnvelope):
-                    return cached_result, True
-
-                return (
-                    ResponseEnvelope.error(
-                        correlation_id=command.correlation_id,
-                        error_code="COMMAND_IDEMPOTENCY_INVALID_STATE",
-                        error_message="Completed command has no cached response.",
-                    ),
-                    False,
-                )
-
-            if cached.state == IdempotencyState.FAILED:
-                removed = self._idempotency_manager.remove(key)
-
-                if removed:
-                    continue
-
-                raise WorkerError(
-                    "failed command can no longer be retried"
-                )
-
-            raise WorkerError(
-                f"Unknown idempotency state for command_id={key!r}"
-            )
+    # ------------------------------------------------------------------
+    # Delivery
+    # ------------------------------------------------------------------
 
     def _publish_with_retry(
         self,
@@ -649,12 +837,18 @@ class AgentWorker:
         response: ResponseEnvelope,
         command_id: str,
     ) -> bool:
+        """Publish a response with bounded delivery retry."""
+
         def send_once() -> bool:
             if self._transport is None:
-                raise _TransientDeliveryError("Transport is unavailable.")
+                raise _TransientDeliveryError(
+                    "Transport is unavailable."
+                )
 
             try:
-                accepted = bool(self._transport.send_response(response))
+                accepted = bool(
+                    self._transport.send_response(response)
+                )
             except _TransientDeliveryError:
                 raise
             except Exception as exc:
@@ -670,13 +864,10 @@ class AgentWorker:
             return True
 
         try:
-            result = self._delivery_retry_executor.execute(
-                send_once,
-            )
-        except Exception as exc:
-            if isinstance(exc, _WorkerStopRequested):
-                raise
-
+            result = self._delivery_retry_executor.execute(send_once)
+        except _WorkerStopRequested:
+            raise
+        except Exception:
             logger.debug(
                 "Response publish retries exhausted: command_id=%s",
                 command_id,
@@ -684,6 +875,89 @@ class AgentWorker:
             return False
 
         return bool(result.result)
+
+    # ------------------------------------------------------------------
+    # Ack Policy Matrix — final actions
+    # ------------------------------------------------------------------
+
+    def _ack(self, token: AckToken, *, status: str = "SUCCESS") -> None:
+        """Commit the offset. Safe to call only after response publish."""
+        if self._transport is None:
+            logger.error("Cannot ack: transport is unavailable")
+            return
+
+        try:
+            self._transport.ack(token, status=status)
+        except Exception:
+            logger.exception(
+                "Transport ack failed: command_id=%s status=%s",
+                token.command_id,
+                status,
+            )
+
+    def _nack_retryable(self, token: AckToken, reason: str) -> None:
+        """Transient failure: do NOT commit; allow redelivery."""
+        if self._transport is None:
+            logger.error("Cannot nack: transport is unavailable")
+            return
+
+        try:
+            self._transport.nack(token, reason=reason, retryable=True)
+        except Exception:
+            logger.exception(
+                "Transport retryable-nack failed: command_id=%s",
+                token.command_id,
+            )
+
+    def _nack_non_retryable(self, token: AckToken, reason: str) -> None:
+        """Permanent failure: nack non-retryable (transport may DLQ)."""
+        if self._transport is None:
+            logger.error("Cannot nack: transport is unavailable")
+            return
+
+        try:
+            self._transport.nack(token, reason=reason, retryable=False)
+        except Exception:
+            logger.exception(
+                "Transport non-retryable-nack failed: command_id=%s",
+                token.command_id,
+            )
+
+    def _handle_validation_failure(
+        self,
+        token: AckToken,
+        exc: BaseException,
+    ) -> None:
+        """Malformed payload: non-retryable nack (transport may DLQ).
+
+        Never logs the raw payload; only the error type and a short
+        reason are surfaced.
+        """
+        reason = f"validation failure: {type(exc).__name__}"
+        logger.warning(
+            "Malformed transport message: command_id=%s reason=%s",
+            token.command_id,
+            reason,
+        )
+        self._nack_non_retryable(token, reason)
+
+    def _handle_unknown_failure(
+        self,
+        token: AckToken,
+        exc: BaseException,
+    ) -> None:
+        """Unknown failure: apply config-driven ack policy."""
+        logger.exception(
+            "Unknown command failure: command_id=%s",
+            token.command_id,
+        )
+
+        reason = f"unknown failure: {type(exc).__name__}"
+
+        if self._ack_on_unknown_error:
+            self._nack_non_retryable(token, reason)
+        else:
+            self._nack_retryable(token, reason)
 
     # ------------------------------------------------------------------
     # Reliability helpers
@@ -703,215 +977,5 @@ class AgentWorker:
             "circuit_breaker": dict(
                 AgentWorker._DEFAULT_RELIABILITY["circuit_breaker"]
             ),
-        }
-
-        if raw is None:
-            return config
-
-        for key, value in raw.items():
-            if key in (
-                "command_retry",
-                "delivery_retry",
-                "circuit_breaker",
-            ) and isinstance(value, Mapping):
-                section = config.setdefault(key, {})
-                section.update(dict(value))
-                continue
-
-            config[key] = value
-
-        return config
-
-    def _reliability_section(
-        self,
-        name: str,
-    ) -> Mapping[str, Any]:
-        section = self._reliability_config.get(name)
-        return section if isinstance(section, Mapping) else {}
-
-    def _resolve_retry_exceptions(
-        self,
-        value: Any,
-        *,
-        default: tuple[type[BaseException], ...],
-    ) -> tuple[type[BaseException], ...]:
-        if value is None:
-            return default
-
-        if isinstance(value, tuple):
-            candidates = value
-        elif isinstance(value, list):
-            candidates = tuple(value)
-        else:
-            candidates = (value,)
-
-        resolved: list[type[BaseException]] = [
-            exception_type
-            for exception_type in candidates
-            if isinstance(exception_type, type)
-            and issubclass(exception_type, BaseException)
-        ]
-
-        return tuple(resolved) if resolved else default
-
-    @staticmethod
-    def _coerce_int(
-        value: Any,
-        *,
-        default: int,
-        minimum: int,
-    ) -> int:
-        try:
-            value_int = int(value)
-        except Exception:
-            return default
-
-        if value_int < minimum:
-            return minimum
-
-        return value_int
-
-    @staticmethod
-    def _coerce_float(
-        value: Any,
-        *,
-        default: float,
-        minimum: float,
-        maximum: Optional[float] = None,
-    ) -> float:
-        try:
-            value_float = float(value)
-        except Exception:
-            return default
-
-        if value_float < minimum:
-            return minimum
-
-        if maximum is not None and value_float > maximum:
-            return float(maximum)
-
-        return float(value_float)
-
-    def _build_retry_executor(
-        self,
-        *,
-        section: Mapping[str, Any],
-        retry_exceptions: tuple[type[BaseException], ...],
-    ) -> RetryExecutor:
-        return RetryExecutor(
-            policy=RetryPolicy(
-                config=RetryConfig(
-                    max_attempts=self._coerce_int(
-                        section.get("max_attempts", 3),
-                        default=3,
-                        minimum=1,
-                    ),
-                    retry_exceptions=retry_exceptions,
-                ),
-                backoff=ExponentialBackoff(
-                    BackoffConfig(
-                        base_delay_seconds=self._coerce_float(
-                            section.get("base_delay_seconds", 0.05),
-                            default=0.05,
-                            minimum=0.0,
-                        ),
-                        max_delay_seconds=self._coerce_float(
-                            section.get("max_delay_seconds", 1.0),
-                            default=1.0,
-                            minimum=0.0,
-                        ),
-                        multiplier=self._coerce_float(
-                            section.get("multiplier", 2.0),
-                            default=2.0,
-                            minimum=1.0,
-                        ),
-                        jitter_ratio=self._coerce_float(
-                            section.get("jitter_ratio", 0.0),
-                            default=0.0,
-                            minimum=0.0,
-                            maximum=1.0,
-                        ),
-                    )
-                ),
-            ),
-            sleep_fn=self._stop_aware_sleep,
-        )
-
-    def _build_circuit_breaker(self) -> Optional[CircuitBreaker]:
-        section = self._reliability_section("circuit_breaker")
-
-        if not bool(section.get("enabled", False)):
-            return None
-
-        try:
-            return CircuitBreaker(
-                config=CircuitBreakerConfig(
-                    failure_threshold=self._coerce_int(
-                        section.get("failure_threshold", 5),
-                        default=5,
-                        minimum=1,
-                    ),
-                    recovery_timeout_seconds=self._coerce_float(
-                        section.get(
-                            "recovery_timeout_seconds",
-                            30.0,
-                        ),
-                        default=30.0,
-                        minimum=0.0,
-                    ),
-                    success_threshold=self._coerce_int(
-                        section.get("success_threshold", 1),
-                        default=1,
-                        minimum=1,
-                    ),
-                )
-            )
-        except Exception:
-            logger.exception("Failed to build circuit breaker")
-            return None
-
-    def _stop_aware_sleep(self, seconds: float) -> None:
-        if seconds <= 0:
-            return
-
-        if self._stop_event.wait(seconds):
-            raise _WorkerStopRequested(
-                "Worker shutdown requested."
-            )
-
-    # ------------------------------------------------------------------
-    # Lifecycle helpers
-    # ------------------------------------------------------------------
-
-    def wait_for_stop(self, timeout: float | None = None) -> bool:
-        """Wait until stop has been requested."""
-
-        return self._stop_event.wait(timeout)
-
-    def request_stop(self) -> None:
-        """Request shutdown without extra lifecycle actions."""
-
-        self._stop_event.set()
-
-    # ------------------------------------------------------------------
-    # Context manager
-    # ------------------------------------------------------------------
-
-    def __enter__(self) -> "AgentWorker":
-        self.start()
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: Any,
-    ) -> None:
-        self.stop()
-
-
-__all__ = [
-    "AgentWorker",
-    "WorkerError",
-    "WorkerState",
-]
+            "ack_on_unknown_error": bool(
+                AgentWorker._DEFAULT_RELIABILITY["

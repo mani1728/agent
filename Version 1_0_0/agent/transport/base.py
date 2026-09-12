@@ -10,20 +10,26 @@ transport, but the rest of the application should depend only on
 ITransportClient.
 
 No concrete transport implementation belongs in this module.
+
+Design notes
+------------
+- The transport layer must NOT know about CommandEnvelope,
+  ResponseEnvelope, HeartbeatPayload, or any other domain contract.
+  It deals only with opaque payloads and ack tokens.
+- Messages are exchanged as TransportMessage instances; parsing,
+  validation, and deserialization are the responsibility of the
+  caller (application layer), not the transport.
+- Acknowledgement is expressed via AckToken so that the transport
+  can be swapped (Kafka, HTTP, ...) without changing domain code.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, Optional, Sequence
-
-from ..contracts.command import CommandEnvelope
-from ..contracts.heartbeat import HeartbeatPayload
-from ..contracts.response import ResponseEnvelope
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Protocol
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True)
 class AckToken:
     """Transport-agnostic acknowledgement token.
 
@@ -31,169 +37,125 @@ class AckToken:
     ------
     command_id:
         Canonical command identifier.
-    ref:
+    transport_ref:
         Optional transport-specific commit/ack reference.
         Examples:
             - Kafka message object
             - (topic, partition, offset)
             - opaque broker delivery handle
-    meta:
-        Optional diagnostic metadata for logging/tracing only.
+    topic:
+        Optional topic/queue name, when the transport exposes one.
+    partition:
+        Optional partition index, when applicable.
+    offset:
+        Optional offset/index, when applicable.
     """
 
     command_id: str
-    ref: Optional[Any] = None
-    meta: Optional[dict[str, Any]] = None
+    transport_ref: Any = None
+    topic: str | None = None
+    partition: int | None = None
+    offset: int | None = None
 
 
-class ITransportClient(ABC):
+@dataclass(frozen=True)
+class TransportMessage:
+    """A single message received from a transport.
+
+    The transport MUST NOT interpret ``payload``. It is delivered as-is
+    (bytes, str, or already-deserialized dict) so that the application
+    layer can perform parsing and validation.
+    """
+
+    payload: bytes | str | dict
+    key: str | None
+    headers: Mapping[str, Any] = field(default_factory=dict)
+    timestamp_ms: int | None = None
+    ack_token: AckToken | None = None
+
+
+class ITransportClient(Protocol):
     """Abstract interface for Agent communication transports.
 
     A transport implementation is responsible for:
 
-    - starting and stopping its communication resources
-    - receiving commands
-    - sending command responses
-    - sending heartbeat/health information
-    - acknowledging processed commands
+    - polling messages from the underlying broker/transport
+    - acknowledging successfully processed messages
+    - negatively acknowledging messages that could not be processed
 
     The Agent business/domain layer must not depend on the concrete
-    transport implementation.
+    transport implementation. Lifecycle concerns (start/stop) and
+    domain-specific operations (send_response, send_heartbeat) are
+    intentionally kept OUT of this interface and are expected to live
+    in higher-level components that use the transport.
     """
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
-    @abstractmethod
-    def start(self) -> None:
-        """Start transport resources.
-
-        Implementations may establish connections, initialize consumers,
-        producers, sessions, or other transport-specific resources.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def stop(self) -> None:
-        """Stop the transport and release its resources cleanly."""
-        raise NotImplementedError
-
-    # ------------------------------------------------------------------
-    # Commands
-    # ------------------------------------------------------------------
-
-    @abstractmethod
-    def poll_commands(
+    def poll_messages(
         self,
-        timeout_sec: float = 1.0,
-    ) -> Sequence[CommandEnvelope]:
-        """Poll for newly available commands.
+        timeout_ms: int = 1000,
+        max_records: int = 1,
+    ) -> list[TransportMessage]:
+        """Poll for newly available messages.
 
         Parameters
         ----------
-        timeout_sec:
-            Maximum amount of time the transport should wait for new
-            commands before returning.
+        timeout_ms:
+            Maximum amount of time (in milliseconds) to wait for new
+            messages before returning.
+        max_records:
+            Maximum number of messages to return in a single call.
 
         Returns
         -------
-        Sequence[CommandEnvelope]
-            Zero or more validated command envelopes.
-
-        Notes
-        -----
-        The returned commands must already satisfy the canonical
-        CommandEnvelope contract. Transport-specific parsing,
-        deserialization, and validation belong inside the concrete
-        transport implementation.
+        list[TransportMessage]
+            Zero or more transport messages. Parsing/validation is the
+            caller's responsibility.
         """
-        raise NotImplementedError
+        ...
 
-    # ------------------------------------------------------------------
-    # Responses
-    # ------------------------------------------------------------------
-
-    @abstractmethod
-    def send_response(
+    def ack(
         self,
-        response: ResponseEnvelope,
-    ) -> bool:
-        """Send the result of a processed command.
-
-        Parameters
-        ----------
-        response:
-            Canonical transport-independent response envelope.
-
-        Returns
-        -------
-        bool
-            True when the transport accepted the response for sending;
-            otherwise False.
-        """
-        raise NotImplementedError
-
-    # ------------------------------------------------------------------
-    # Heartbeat
-    # ------------------------------------------------------------------
-
-    @abstractmethod
-    def send_heartbeat(
-        self,
-        heartbeat: HeartbeatPayload,
-    ) -> bool:
-        """Send the current Agent health/status information.
-
-        Parameters
-        ----------
-        heartbeat:
-            Canonical transport-independent heartbeat payload.
-
-        Returns
-        -------
-        bool
-            True when the transport accepted the heartbeat for sending;
-            otherwise False.
-        """
-        raise NotImplementedError
-
-    # ------------------------------------------------------------------
-    # Acknowledgement
-    # ------------------------------------------------------------------
-
-    @abstractmethod
-    def ack_command(
-        self,
-        command_id: str,
-        *,
-        ack_token: Optional[AckToken] = None,
+        token: AckToken,
+        status: str = "SUCCESS",
     ) -> None:
-        """Acknowledge transport-level processing of a command.
+        """Acknowledge successful processing of a message.
 
         Parameters
         ----------
-        command_id:
-            Unique command identifier being acknowledged.
-        ack_token:
-            Optional transport-agnostic token that can carry
-            transport-specific acknowledgement reference.
-
-            - For Kafka manual commit: this SHOULD include offset/message
-              reference required to commit safely.
-            - For transports without explicit ack semantics: may be None.
-
-        Notes
-        -----
-        The exact acknowledgement semantics are transport-specific.
-
-        The interface remains transport-agnostic while allowing concrete
-        adapters to receive commit metadata when needed.
+        token:
+            Transport-agnostic token identifying the message and
+            carrying any transport-specific commit reference.
+        status:
+            Optional status label for diagnostics/logging. Does not
+            change the commit semantics.
         """
-        raise NotImplementedError
+        ...
+
+    def nack(
+        self,
+        token: AckToken,
+        reason: str,
+        retryable: bool = True,
+    ) -> None:
+        """Negatively acknowledge a message.
+
+        Parameters
+        ----------
+        token:
+            Transport-agnostic token identifying the message and
+            carrying any transport-specific commit reference.
+        reason:
+            Human-readable reason for the failure. Must NOT contain
+            secrets, credentials, or sensitive payload contents.
+        retryable:
+            Whether the transport is allowed to redeliver the message.
+            Non-retryable nacks should not be retried by the transport.
+        """
+        ...
 
 
 __all__ = [
     "AckToken",
+    "TransportMessage",
     "ITransportClient",
 ]

@@ -1,14 +1,36 @@
 # Path: Version 1_0_0/agent/transport/kafka/kafka_transport.py
 
+"""Kafka transport implementation.
+
+Responsibilities
+----------------
+- Own the Kafka consumer (via ``KafkaListener``).
+- Own the Kafka producer (via ``KafkaResponder``).
+- Expose a thin, transport-level API:
+    - ``poll_messages`` — returns raw ``TransportMessage`` objects.
+    - ``ack`` — commits the offset for a given ``AckToken``.
+    - ``nack`` — negatively acknowledges, with optional DLQ routing.
+
+This module intentionally does NOT:
+- Import or reference ``CommandEnvelope``, ``ResponseEnvelope``,
+  ``HeartbeatPayload``, or any other domain contract.
+- Parse, validate, or normalize business payloads.
+- Decide business-level commit semantics (that belongs to the
+  application/core layer above the transport).
+
+Legacy ``send_response`` / ``send_heartbeat`` helpers are retained as
+**non-interface** methods so that the existing responder wiring
+continues to function during the P1 refactor. They are NOT part of
+``ITransportClient`` and will be moved to a dedicated producer service
+in a later phase.
+"""
+
 from __future__ import annotations
 
 import logging
 from typing import Any, Optional, Sequence
 
-from agent.contracts.command import CommandEnvelope
-from agent.contracts.heartbeat import HeartbeatPayload
-from agent.contracts.response import ResponseEnvelope
-from agent.transport.base import AckToken, ITransportClient
+from agent.transport.base import AckToken, ITransportClient, TransportMessage
 
 from .listener import KafkaListener
 from .responder import KafkaResponder
@@ -23,8 +45,13 @@ logger = logging.getLogger(__name__)
 
 
 class KafkaTransport(ITransportClient):
-    """
-    Kafka implementation of the transport-independent ITransportClient.
+    """Kafka implementation of the transport-independent ``ITransportClient``.
+
+    Notes
+    -----
+    - This class no longer accepts or returns domain contracts.
+    - ``ack`` / ``nack`` operate strictly on ``AckToken``.
+    - The commit lifecycle is delegated to ``KafkaListener``.
     """
 
     def __init__(
@@ -62,7 +89,7 @@ class KafkaTransport(ITransportClient):
         self._started = False
 
     # ------------------------------------------------------------------
-    # Lifecycle
+    # Lifecycle (legacy; kept for current wiring)
     # ------------------------------------------------------------------
 
     def start(self) -> None:
@@ -106,67 +133,144 @@ class KafkaTransport(ITransportClient):
         logger.info("Kafka transport stopped")
 
     # ------------------------------------------------------------------
-    # Command polling
+    # Polling (thin)
     # ------------------------------------------------------------------
 
-    def poll_commands(
+    def poll_messages(
         self,
-        timeout_sec: float = 1.0,
-    ) -> Sequence[CommandEnvelope]:
+        timeout_ms: int = 1000,
+        max_records: int = 1,
+    ) -> list[TransportMessage]:
+        """Poll raw ``TransportMessage`` objects from Kafka.
+
+        No parsing, validation, or envelope construction happens here.
+        Callers are expected to parse ``TransportMessage.payload`` in
+        the application/core layer.
+        """
         if not self._started:
             self.start()
 
-        commands = self.listener.poll_commands(timeout_sec=timeout_sec)
-
-        if self._commit_policy.is_application_managed:
-            for command in commands:
-                # Try to capture commit reference from listener if available.
-                # This keeps commit logic transport-safe and future-proof.
-                commit_ref = None
-                try:
-                    if hasattr(self.listener, "get_commit_ref"):
-                        commit_ref = self.listener.get_commit_ref(command.command_id)
-                except Exception:
-                    logger.debug(
-                        "Failed to fetch commit ref for command_id=%s",
-                        command.command_id,
-                        exc_info=True,
-                    )
-
-                self._commit_trackers[command.command_id] = CommandCommitTracker(
-                    command.command_id,
-                    commit_ref=commit_ref,
-                )
-        else:
-            for command in commands:
-                self.listener.release_pending_record(command.command_id)
-
-        return commands
+        return self.listener.poll_messages(
+            timeout_ms=timeout_ms,
+            max_records=max_records,
+        )
 
     # ------------------------------------------------------------------
-    # Responses
+    # Acknowledgement (transport-level only)
     # ------------------------------------------------------------------
 
-    def send_response(
+    def ack(
         self,
-        response: ResponseEnvelope,
-    ) -> bool:
-        if not isinstance(response, ResponseEnvelope):
-            raise TypeError("response must be ResponseEnvelope")
+        token: AckToken,
+        status: str = "SUCCESS",
+    ) -> None:
+        """Commit the Kafka offset referenced by ``token``.
 
+        Raises
+        ------
+        ValueError
+            If ``token`` is None or lacks a usable ``transport_ref``.
+        RuntimeError
+            If the underlying consumer is unavailable.
+        """
+        if token is None:
+            raise ValueError("AckToken must not be None")
+
+        ref = token.transport_ref
+        if ref is None:
+            raise ValueError("AckToken.transport_ref is required")
+
+        if not self._commit_policy.is_application_managed:
+            logger.debug(
+                "ack() delegated to auto-commit: command_id=%s",
+                token.command_id,
+            )
+            return
+
+        # Delegate the physical commit to the listener, which owns the
+        # Kafka consumer and its commit semantics (including the
+        # "+1" offset rule).
+        self.listener.ack(token, status=status)
+
+        # Clean up per-command tracker state so duplicate acks are
+        # cheap no-ops.
+        tracker = self._commit_trackers.get(token.command_id)
+        if tracker is not None and tracker.state == CommitState.ACKED:
+            self._commit_trackers.pop(token.command_id, None)
+
+    def nack(
+        self,
+        token: AckToken,
+        reason: str,
+        retryable: bool = True,
+    ) -> None:
+        """Negatively acknowledge a message.
+
+        Policy
+        ------
+        - ``retryable=True``:
+            No commit is performed. The message may be redelivered by
+            the broker (subject to consumer settings).
+        - ``retryable=False``:
+            If a DLQ hook is enabled, the payload is forwarded there
+            and the offset is committed so the bad message is not
+            reprocessed indefinitely. If no DLQ hook is available,
+            the message is left uncommitted and a warning is logged so
+            that a higher layer can pick it up.
+        """
+        if token is None:
+            raise ValueError("AckToken must not be None")
+
+        safe_reason = self._sanitize_reason(reason)
+
+        if retryable:
+            logger.warning(
+                "nack (retryable): command_id=%s reason=%s",
+                token.command_id,
+                safe_reason,
+            )
+            self.listener.nack(token, reason=safe_reason, retryable=True)
+            return
+
+        logger.error(
+            "nack (non-retryable): command_id=%s reason=%s",
+            token.command_id,
+            safe_reason,
+        )
+
+        if self._send_to_dlq_if_enabled(token, safe_reason):
+            # DLQ succeeded -> advance the offset so we do not loop.
+            self.ack(token, status="NON_RETRYABLE")
+        else:
+            # No DLQ available -> leave uncommitted and let a higher
+            # layer decide (avoids silent data loss).
+            logger.warning(
+                "No DLQ available; leaving non-retryable message "
+                "uncommitted: command_id=%s",
+                token.command_id,
+            )
+            self.listener.nack(token, reason=safe_reason, retryable=False)
+
+    # ------------------------------------------------------------------
+    # Legacy helpers retained outside ITransportClient
+    # ------------------------------------------------------------------
+
+    def send_response(self, response: Any) -> bool:
+        """Send a domain response via the responder.
+
+        Kept for backward compatibility during P1. Will be moved to a
+        dedicated producer service in a later phase. NOT part of
+        ``ITransportClient``.
+        """
         return self.responder.send_response(response)
 
-    # ------------------------------------------------------------------
-    # Heartbeat
-    # ------------------------------------------------------------------
+    def send_heartbeat(self, status: Any) -> bool:
+        """Send a heartbeat/status payload via the responder.
 
-    def send_heartbeat(
-        self,
-        status: HeartbeatPayload,
-    ) -> bool:
-        if not isinstance(status, HeartbeatPayload):
-            raise TypeError("status must be HeartbeatPayload")
-
+        Kept for backward compatibility during P1. Will be moved to a
+        dedicated producer service in a later phase. NOT part of
+        ``ITransportClient``.
+        """
         producer = self.responder._ensure_producer()
         if producer is None:
             logger.warning("Cannot send heartbeat: Kafka producer unavailable")
@@ -188,12 +292,13 @@ class KafkaTransport(ITransportClient):
                 ("encoding", b"identity"),
             ]
 
-            if status.agent_id:
-                headers.append(("client_id", status.agent_id.encode("utf-8")))
+            agent_id = getattr(status, "agent_id", None)
+            if agent_id:
+                headers.append(("client_id", agent_id.encode("utf-8")))
 
             producer.produce(
                 topic=topic,
-                key=status.agent_id or None,
+                key=agent_id or None,
                 value=payload,
                 headers=headers,
                 on_delivery=self.responder._delivery_cb,
@@ -211,87 +316,39 @@ class KafkaTransport(ITransportClient):
             return False
 
     # ------------------------------------------------------------------
-    # Acknowledgement
+    # DLQ hook (no-op by default)
     # ------------------------------------------------------------------
 
-    def ack_command(
+    def _send_to_dlq_if_enabled(
         self,
-        command_id: str,
-        *,
-        ack_token: Optional[AckToken] = None,
-    ) -> None:
+        token: AckToken,
+        reason: str,
+    ) -> bool:
+        """Forward a poisoned message to a DLQ if configured.
+
+        Returns
+        -------
+        bool
+            True if the payload was successfully forwarded to a DLQ,
+            False otherwise. Default implementation is a no-op and
+            returns False; subclasses or configuration may enable an
+            actual DLQ publisher.
         """
-        Acknowledge command consumption (application-managed path).
+        dlq_topic = self._get_config_value("kafka.topics.dlq", None)
+        if not dlq_topic:
+            return False
 
-        Safe usage:
-            call only after:
-                - response publication success (after_response), OR
-                - spool persistence success (after_spool; later phase)
-        """
-        if not command_id:
-            raise ValueError("command_id must not be empty")
-
-        if ack_token is not None and ack_token.command_id != command_id:
-            raise ValueError(
-                "ack_token.command_id must match command_id"
-            )
-
-        if not self._commit_policy.is_application_managed:
-            logger.debug(
-                "Kafka acknowledgement delegated to auto-commit: command_id=%s",
-                command_id,
-            )
-            return
-
-        tracker = self._commit_trackers.get(command_id)
-        if tracker is None:
-            logger.debug(
-                "Ignoring duplicate/stale Kafka acknowledgement: command_id=%s",
-                command_id,
-            )
-            return
-
-        if tracker.state == CommitState.ACKED:
-            return
-
-        if tracker.state == CommitState.FAILED:
-            logger.debug(
-                "Skipping ACK for failed command: command_id=%s",
-                command_id,
-            )
-            return
-
-        # If caller provides a concrete transport token, prefer it.
-        if ack_token is not None and ack_token.ref is not None:
-            tracker.commit_ref = ack_token.ref
-
-        # Current phase target: AFTER_RESPONSE
-        # (worker must invoke ack only after successful response send)
-        tracker.mark_response_sent()
-
-        decision = self._commit_policy.evaluate(tracker)
-        if not decision:
-            logger.debug(
-                "Kafka acknowledgement not committed: command_id=%s reason=%s state=%s",
-                command_id,
-                decision.reason,
-                decision.state.value if decision.state else None,
-            )
-            return
-
-        related_command_ids = self.listener.related_command_ids(command_id)
-        committed = self.listener.commit_command(command_id)
-        if not committed:
-            # Batched record: keep tracker state until last sibling can advance offset.
-            return
-
-        for tracked_command_id in related_command_ids:
-            tracked_tracker = self._commit_trackers.pop(tracked_command_id, None)
-            if tracked_tracker is not None:
-                tracked_tracker.mark_acked()
+        logger.debug(
+            "DLQ forwarding not implemented in this phase "
+            "(topic=%s, command_id=%s, reason=%s)",
+            dlq_topic,
+            token.command_id,
+            reason,
+        )
+        return False
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Config helpers
     # ------------------------------------------------------------------
 
     def _get_config_value(
@@ -314,6 +371,22 @@ class KafkaTransport(ITransportClient):
             return default
 
         return default if value is None else value
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sanitize_reason(reason: Any) -> str:
+        """Truncate and strip a reason string for safe logging."""
+        if reason is None:
+            return ""
+
+        text = str(reason)
+        if len(text) > 256:
+            text = text[:253] + "..."
+
+        return text
 
     # ------------------------------------------------------------------
     # Context manager
