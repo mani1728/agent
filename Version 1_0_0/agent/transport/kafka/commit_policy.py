@@ -18,11 +18,15 @@ class CommitPolicy(str, Enum):
         Kafka/librdkafka manages offsets automatically.
 
     MANUAL:
-        Application explicitly commits offsets.
+        Application explicitly commits offsets after execution stage.
 
     AFTER_RESPONSE:
-        Offset should be committed only after command execution
-        and response publication have completed successfully.
+        Offset is committed only after command execution and response
+        publication have completed successfully.
+
+    AFTER_SPOOL:
+        Offset is committed only after command/result is safely persisted
+        into spool (durability-first mode).
 
     DISABLED:
         No offset commit is performed by the application.
@@ -31,6 +35,7 @@ class CommitPolicy(str, Enum):
     AUTO = "auto"
     MANUAL = "manual"
     AFTER_RESPONSE = "after_response"
+    AFTER_SPOOL = "after_spool"
     DISABLED = "disabled"
 
 
@@ -43,6 +48,7 @@ class CommitState(str, Enum):
     EXECUTING = "executing"
     EXECUTED = "executed"
     RESPONSE_SENT = "response_sent"
+    SPOOL_PERSISTED = "spool_persisted"
     ACKED = "acked"
     FAILED = "failed"
 
@@ -51,8 +57,8 @@ class CommitDecision:
     """
     Result of evaluating whether a Kafka offset may be committed.
 
-    This is deliberately transport-independent at the decision level.
-    The actual Kafka commit operation remains in the Kafka adapter.
+    This is transport-independent at decision level.
+    Actual Kafka commit operation remains in Kafka adapter/transport.
     """
 
     def __init__(
@@ -84,30 +90,42 @@ class CommitDecision:
 
 class CommandCommitTracker:
     """
-    Tracks the logical lifecycle of a consumed command.
+    Tracks logical lifecycle + commit metadata of one consumed command.
 
     The tracker does NOT:
         - call Kafka
         - commit offsets
         - retry commands
         - execute commands
-        - persist state
+        - persist state by itself
 
-    It only records enough state for CommitPolicy to make a safe
-    decision later.
+    It records enough state for KafkaCommitPolicy to decide safely.
     """
 
     def __init__(
         self,
         command_id: str,
+        *,
+        commit_ref: Optional[Any] = None,
     ) -> None:
         if not command_id:
-            raise ValueError(
-                "command_id must not be empty"
-            )
+            raise ValueError("command_id must not be empty")
 
         self.command_id = str(command_id)
         self.state = CommitState.RECEIVED
+
+        # Opaque commit reference carried from transport poll result.
+        # Examples:
+        #   - confluent message object
+        #   - {"topic": "...", "partition": 0, "offset": 123}
+        #   - any adapter-specific token used later for ack/commit
+        self.commit_ref = commit_ref
+
+        self.last_error: Optional[str] = None
+
+    # -----------------------------
+    # Lifecycle markers
+    # -----------------------------
 
     def mark_executing(self) -> None:
         self.state = CommitState.EXECUTING
@@ -118,14 +136,38 @@ class CommandCommitTracker:
     def mark_response_sent(self) -> None:
         self.state = CommitState.RESPONSE_SENT
 
+    def mark_spool_persisted(self) -> None:
+        self.state = CommitState.SPOOL_PERSISTED
+
     def mark_acked(self) -> None:
         self.state = CommitState.ACKED
 
-    def mark_failed(self) -> None:
+    def mark_failed(self, error: Optional[str] = None) -> None:
         self.state = CommitState.FAILED
+        if error:
+            self.last_error = str(error)
+
+    # -----------------------------
+    # Helpers
+    # -----------------------------
 
     def can_commit_after_response(self) -> bool:
         return self.state == CommitState.RESPONSE_SENT
+
+    def can_commit_after_spool(self) -> bool:
+        return self.state == CommitState.SPOOL_PERSISTED
+
+    @property
+    def has_commit_ref(self) -> bool:
+        return self.commit_ref is not None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "command_id": self.command_id,
+            "state": self.state.value,
+            "has_commit_ref": self.has_commit_ref,
+            "last_error": self.last_error,
+        }
 
 
 class KafkaCommitPolicy:
@@ -133,16 +175,7 @@ class KafkaCommitPolicy:
     Determines when a Kafka command offset is logically eligible
     for acknowledgement/commit.
 
-    Phase 1 behavior:
-        The existing configuration uses Kafka auto-commit.
-
-        Therefore this policy is informational and does not perform
-        any Kafka commit operation.
-
-    Later phases can use this class to introduce:
-        consumed -> executed -> response sent -> commit
-
-    semantics without embedding commit logic inside the business layer.
+    This policy does NOT perform Kafka commit itself.
     """
 
     def __init__(
@@ -162,13 +195,13 @@ class KafkaCommitPolicy:
         if isinstance(policy, CommitPolicy):
             return policy
 
+        normalized = str(policy).strip().lower()
         try:
-            return CommitPolicy(
-                str(policy).strip().lower()
-            )
+            return CommitPolicy(normalized)
         except ValueError as exc:
             raise ValueError(
-                f"Unsupported Kafka commit policy: {policy!r}"
+                f"Unsupported Kafka commit policy: {policy!r}. "
+                f"Supported: {[p.value for p in CommitPolicy]}"
             ) from exc
 
     @classmethod
@@ -177,49 +210,30 @@ class KafkaCommitPolicy:
         config: Any,
     ) -> "KafkaCommitPolicy":
         """
-        Build a policy from the existing configuration.
+        Build a policy from configuration.
 
-        Compatibility rule:
-            kafka.enable_auto_commit=true
-                -> AUTO
-
-            kafka.enable_auto_commit=false
-                -> MANUAL
-
-        An explicit kafka.commit_policy, if present, takes precedence.
+        Precedence:
+            1) kafka.commit_policy (explicit)
+            2) kafka.enable_auto_commit (compat fallback)
+               True  -> AUTO
+               False -> MANUAL
         """
-
         explicit_policy = None
 
         try:
-            explicit_policy = config.get(
-                "kafka.commit_policy",
-                None,
-            )
+            explicit_policy = config.get("kafka.commit_policy", None)
         except AttributeError:
-            pass
+            explicit_policy = None
 
         if explicit_policy:
-            return cls(
-                explicit_policy
-            )
+            return cls(explicit_policy)
 
         try:
-            auto_commit = config.get(
-                "kafka.enable_auto_commit",
-                True,
-            )
+            auto_commit = config.get("kafka.enable_auto_commit", True)
         except AttributeError:
             auto_commit = True
 
-        if bool(auto_commit):
-            return cls(
-                CommitPolicy.AUTO
-            )
-
-        return cls(
-            CommitPolicy.MANUAL
-        )
+        return cls(CommitPolicy.AUTO if bool(auto_commit) else CommitPolicy.MANUAL)
 
     # ------------------------------------------------------------------
     # Decision logic
@@ -232,13 +246,20 @@ class KafkaCommitPolicy:
         """
         Determine whether the command is currently eligible for commit.
         """
+        if not isinstance(tracker, CommandCommitTracker):
+            raise TypeError("tracker must be CommandCommitTracker")
 
-        if not isinstance(
-            tracker,
-            CommandCommitTracker,
-        ):
-            raise TypeError(
-                "tracker must be CommandCommitTracker"
+        # Hard-stop guard: without commit reference, ack cannot be executed safely.
+        if self.policy in {
+            CommitPolicy.MANUAL,
+            CommitPolicy.AFTER_RESPONSE,
+            CommitPolicy.AFTER_SPOOL,
+        } and not tracker.has_commit_ref:
+            return CommitDecision(
+                allowed=False,
+                reason="Missing commit reference for application-managed commit.",
+                command_id=tracker.command_id,
+                state=tracker.state,
             )
 
         if self.policy == CommitPolicy.AUTO:
@@ -255,23 +276,16 @@ class KafkaCommitPolicy:
         if self.policy == CommitPolicy.DISABLED:
             return CommitDecision(
                 allowed=False,
-                reason=(
-                    "Offset commits are explicitly disabled."
-                ),
+                reason="Offset commits are explicitly disabled.",
                 command_id=tracker.command_id,
                 state=tracker.state,
             )
 
         if self.policy == CommitPolicy.MANUAL:
-            if tracker.state in {
-                CommitState.RECEIVED,
-                CommitState.EXECUTING,
-            }:
+            if tracker.state in {CommitState.RECEIVED, CommitState.EXECUTING}:
                 return CommitDecision(
                     allowed=False,
-                    reason=(
-                        "Command has not completed execution."
-                    ),
+                    reason="Command has not completed execution.",
                     command_id=tracker.command_id,
                     state=tracker.state,
                 )
@@ -279,20 +293,14 @@ class KafkaCommitPolicy:
             if tracker.state == CommitState.FAILED:
                 return CommitDecision(
                     allowed=False,
-                    reason=(
-                        "Failed command must not be committed "
-                        "by the generic manual policy."
-                    ),
+                    reason="Failed command must not be committed by generic manual policy.",
                     command_id=tracker.command_id,
                     state=tracker.state,
                 )
 
             return CommitDecision(
                 allowed=True,
-                reason=(
-                    "Manual commit is allowed after command "
-                    "execution has completed."
-                ),
+                reason="Manual commit is allowed after command execution completion.",
                 command_id=tracker.command_id,
                 state=tracker.state,
             )
@@ -301,19 +309,30 @@ class KafkaCommitPolicy:
             if tracker.state == CommitState.RESPONSE_SENT:
                 return CommitDecision(
                     allowed=True,
-                    reason=(
-                        "Response has been successfully published."
-                    ),
+                    reason="Response has been successfully published.",
                     command_id=tracker.command_id,
                     state=tracker.state,
                 )
 
             return CommitDecision(
                 allowed=False,
-                reason=(
-                    "Offset cannot be committed before "
-                    "response publication."
-                ),
+                reason="Offset cannot be committed before response publication.",
+                command_id=tracker.command_id,
+                state=tracker.state,
+            )
+
+        if self.policy == CommitPolicy.AFTER_SPOOL:
+            if tracker.state == CommitState.SPOOL_PERSISTED:
+                return CommitDecision(
+                    allowed=True,
+                    reason="Command/result is durably persisted in spool.",
+                    command_id=tracker.command_id,
+                    state=tracker.state,
+                )
+
+            return CommitDecision(
+                allowed=False,
+                reason="Offset cannot be committed before spool persistence.",
                 command_id=tracker.command_id,
                 state=tracker.state,
             )
@@ -330,12 +349,9 @@ class KafkaCommitPolicy:
         tracker: CommandCommitTracker,
     ) -> bool:
         """
-        Convenience method returning only the commit decision.
+        Convenience method returning only commit decision.
         """
-
-        return bool(
-            self.evaluate(tracker)
-        )
+        return bool(self.evaluate(tracker))
 
     # ------------------------------------------------------------------
     # Runtime information
@@ -346,6 +362,7 @@ class KafkaCommitPolicy:
         return self.policy in {
             CommitPolicy.MANUAL,
             CommitPolicy.AFTER_RESPONSE,
+            CommitPolicy.AFTER_SPOOL,
         }
 
     @property
