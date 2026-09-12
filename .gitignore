@@ -37,3 +37,4 @@ Version 1_0_0/agent/docs/
 *.saved.bak
 *backup*
 *.zip
+config.json
