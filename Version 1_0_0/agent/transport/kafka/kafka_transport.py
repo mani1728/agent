@@ -14,7 +14,7 @@ from .listener import KafkaListener
 from .responder import KafkaResponder
 from .commit_policy import (
     CommandCommitTracker,
-    CommitPolicy,
+    CommitState,
     KafkaCommitPolicy,
 )
 
@@ -54,6 +54,31 @@ class KafkaTransport(ITransportClient):
     ) -> None:
         self.config = config
 
+        effective_config = config
+        if effective_config is None:
+            try:
+                from agent.infrastructure.config_manager import cfg
+
+                effective_config = cfg()
+            except Exception:
+                effective_config = None
+
+        # The canonical worker path owns offsets. Validate its safety before
+        # creating Kafka resources so an invalid configuration cannot leave a
+        # partially initialized consumer/producer behind.
+        self._commit_policy = KafkaCommitPolicy.from_config(effective_config)
+        configured_auto_commit = bool(
+            self._get_config_value("kafka.enable_auto_commit", False)
+        )
+        if configured_auto_commit:
+            raise ValueError(
+                "Canonical Kafka runtime requires kafka.enable_auto_commit=false"
+            )
+        if not self._commit_policy.is_application_managed:
+            raise ValueError(
+                "Canonical Kafka runtime requires an application-managed commit policy"
+            )
+
         self.listener = KafkaListener(
             config=config,
         )
@@ -62,19 +87,7 @@ class KafkaTransport(ITransportClient):
             config=config,
         )
 
-        effective_config = config or self.listener.config
-        self._commit_policy = KafkaCommitPolicy.from_config(effective_config)
-        if (
-            self._commit_policy.is_application_managed
-            and bool(self._get_config_value("kafka.enable_auto_commit", True))
-        ):
-            logger.warning(
-                "Ignoring application-managed kafka.commit_policy while "
-                "kafka.enable_auto_commit=true"
-            )
-            self._commit_policy = KafkaCommitPolicy(CommitPolicy.AUTO)
         self._commit_trackers: dict[str, CommandCommitTracker] = {}
-
         self._started = False
 
     # ------------------------------------------------------------------
@@ -342,10 +355,16 @@ class KafkaTransport(ITransportClient):
 
         tracker = self._commit_trackers.get(command_id)
         if tracker is None:
-            raise KeyError(
-                "No Kafka commit tracker is registered for command_id="
-                f"{command_id!r}"
+            # A repeated ACK after a successful record commit is a no-op.
+            # No second Consumer.commit() call is issued.
+            logger.debug(
+                "Ignoring duplicate or stale Kafka acknowledgement: command_id=%s",
+                command_id,
             )
+            return
+
+        if tracker.state == CommitState.ACKED:
+            return
 
         tracker.mark_response_sent()
         decision = self._commit_policy.evaluate(tracker)

@@ -267,7 +267,12 @@ class AgentWorker:
         )
 
         for command in commands:
-            self._process_command(command)
+            try:
+                self._process_command(command)
+            except Exception:
+                logger.exception(
+                    "Unexpected command processing error; continuing worker loop"
+                )
 
         return len(commands)
 
@@ -331,9 +336,11 @@ class AgentWorker:
             logger.error("Transport returned a non-CommandEnvelope command")
             return
 
+        execution_failed = False
         try:
             response = self.execute(command)
         except Exception:
+            execution_failed = True
             logger.exception(
                 "Command execution escaped worker boundary: command_id=%s",
                 command.command_id,
@@ -363,6 +370,13 @@ class AgentWorker:
         if not sent:
             logger.error(
                 "Response was not accepted by transport: command_id=%s",
+                command.command_id,
+            )
+            return
+
+        if execution_failed:
+            logger.warning(
+                "Command execution failed; response published but command will not be acknowledged: command_id=%s",
                 command.command_id,
             )
             return

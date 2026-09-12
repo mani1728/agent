@@ -284,6 +284,15 @@ class KafkaResponder:
                 "Failed to flush Kafka response producer during close"
             )
 
+        close = getattr(producer, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.exception(
+                    "Failed to close Kafka response producer"
+                )
+
     # ------------------------------------------------------------------
     # Serialization
     # ------------------------------------------------------------------
@@ -467,6 +476,16 @@ class KafkaResponder:
                 )
 
         total = len(chunks)
+        delivery_errors: list[Any] = []
+        delivery_successes = 0
+
+        def _delivery_result(err: Any, message: Any) -> None:
+            nonlocal delivery_successes
+            if err is not None:
+                delivery_errors.append(err)
+            else:
+                delivery_successes += 1
+            self._delivery_cb(err, message)
 
         try:
             for sequence, chunk in enumerate(chunks):
@@ -508,7 +527,7 @@ class KafkaResponder:
                     key=key,
                     value=chunk,
                     headers=kafka_headers,
-                    on_delivery=self._delivery_cb,
+                    on_delivery=_delivery_result,
                 )
 
                 # Allow librdkafka to serve delivery callbacks and
@@ -516,7 +535,34 @@ class KafkaResponder:
                 producer.poll(0)
 
             if flush:
-                producer.flush()
+                remaining = producer.flush()
+                if remaining not in (None, 0):
+                    logger.error(
+                        "Kafka response delivery did not complete; pending_messages=%s",
+                        remaining,
+                    )
+                    return False
+
+            if delivery_errors:
+                logger.error(
+                    "Kafka response delivery failed for %s message(s)",
+                    len(delivery_errors),
+                )
+                return False
+
+            if flush and delivery_successes != total:
+                logger.error(
+                    "Kafka response delivery could not be confirmed: confirmed=%s expected=%s",
+                    delivery_successes,
+                    total,
+                )
+                return False
+
+            if not flush:
+                logger.warning(
+                    "Kafka response publication is asynchronous; delivery cannot be confirmed before ACK"
+                )
+                return False
 
             return True
 

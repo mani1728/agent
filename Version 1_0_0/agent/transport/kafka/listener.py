@@ -159,10 +159,15 @@ class KafkaListener:
             "latest",
         )
 
-        enable_auto_commit = self._get_config_value(
-            "kafka.enable_auto_commit",
-            True,
-        )
+        if self._get_config_value("app.use_agent_worker", True):
+            # Canonical AgentWorker processing owns the offset lifecycle.
+            # Never allow Kafka to advance offsets independently.
+            enable_auto_commit = False
+        else:
+            enable_auto_commit = self._get_config_value(
+                "kafka.enable_auto_commit",
+                True,
+            )
 
         session_timeout_ms = self._get_config_value(
             "kafka.session_timeout_ms",

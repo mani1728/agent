@@ -1,4 +1,4 @@
-# Path: Version 1_0_0/main.py
+# Path: Version 1_0_0/agent/main.py
 
 # -*- coding: utf-8 -*-
 """
@@ -11,7 +11,7 @@ Migration status:
 - Legacy ClientAuth registration/heartbeat is intentionally preserved.
 - Legacy hot-reload configuration is intentionally preserved.
 - Legacy signal/shutdown behavior is intentionally preserved.
-- AgentWorker is opt-in through app.use_agent_worker.
+- AgentWorker is the canonical/default runtime; legacy listener remains compatibility-only.
 - Transport migration will be introduced incrementally in later phases.
 
 Current responsibility:
@@ -133,6 +133,40 @@ def _config_bool(config, path: str, default: bool = False) -> bool:
     return bool(value)
 
 
+def _validate_canonical_kafka_config(config) -> None:
+    """Validate minimum operational Kafka settings for the worker path."""
+    required = {
+        "kafka.bootstrap_servers": config.get("kafka.bootstrap_servers", None),
+        "kafka.group_id": config.get("kafka.group_id", None),
+        "kafka.topics.commands": config.get("kafka.topics.commands", None),
+    }
+
+    missing: list[str] = []
+    for key, value in required.items():
+        if isinstance(value, (list, tuple)):
+            if not any(str(item).strip() for item in value):
+                missing.append(key)
+        elif value is None or not str(value).strip():
+            missing.append(key)
+
+    auto_commit = config.get("kafka.enable_auto_commit", None)
+    auto_commit_is_false = (
+        auto_commit is False
+        or (
+            isinstance(auto_commit, str)
+            and auto_commit.strip().lower() in {"0", "false", "no", "off"}
+        )
+    )
+    if not auto_commit_is_false:
+        missing.append("kafka.enable_auto_commit=false")
+
+    if missing:
+        raise RuntimeError(
+            "Canonical Kafka runtime configuration is not operationally "
+            "configured; missing required settings: " + ", ".join(missing)
+        )
+
+
 # ======================================================================
 # Main application entry point
 # ======================================================================
@@ -145,7 +179,7 @@ def main() -> None:
     This function intentionally remains compatible with the existing
     Kafka-based runtime during the migration.
 
-    The new AgentWorker is not connected here yet.
+    The AgentWorker is the canonical runtime; the legacy listener remains an explicit compatibility path.
     """
 
     # ------------------------------------------------------------------
@@ -282,7 +316,7 @@ def main() -> None:
     use_agent_worker = _config_bool(
         config,
         "app.use_agent_worker",
-        False,
+        True,
     )
     listener = None
     worker = None
@@ -290,6 +324,7 @@ def main() -> None:
 
     try:
         if use_agent_worker:
+            _validate_canonical_kafka_config(config)
             transport = TransportFactory.create(config)
             worker = AgentWorker(
                 CommandExecutor(),
