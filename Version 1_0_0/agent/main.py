@@ -63,6 +63,7 @@ try:  # Package-safe execution: python -m agent
     from .infrastructure.config_manager import cfg
     from .security.client_auth import ClientAuth
     from .transport.factory import TransportFactory
+    from .reliability.idempotency import SQLiteIdempotencyStore
 except ImportError:  # Direct execution compatibility: python agent/main.py
     # حالت سازگاری با اجرای مستقیم فایل: python agent/main.py
     from agent.core.command_executor import CommandExecutor
@@ -71,6 +72,7 @@ except ImportError:  # Direct execution compatibility: python agent/main.py
     from agent.infrastructure.config_manager import cfg
     from agent.security.client_auth import ClientAuth
     from agent.transport.factory import TransportFactory
+    from agent.reliability.idempotency import SQLiteIdempotencyStore
 
 try:
     from .transport.kafka.listener import KafkaListener as _KafkaListener
@@ -164,6 +166,101 @@ def _config_bool(config, path: str, default: bool = False) -> bool:
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
     # در غیر این صورت مقدار را به بولین تبدیل می‌کند
+
+
+def _safe_config_value(config, path: str, default: Any = None) -> Any:
+    try:
+        return config.get(path, default)
+    except Exception:
+        return default
+
+
+def _build_idempotency_store(
+    config,
+    logger,
+) -> SQLiteIdempotencyStore | None:
+    persistence_config = _safe_config_value(
+        config,
+        "persistence",
+        {},
+    )
+
+    db_path = _safe_config_value(
+        config,
+        "persistence.idempotency_db_path",
+        None,
+    )
+
+    if not db_path:
+        db_path = _safe_config_value(
+            persistence_config,
+            "idempotency_db_path",
+            None,
+        )
+
+    if not db_path:
+        db_path = _safe_config_value(
+            config,
+            "persistence.spool_db_path",
+            None,
+        )
+
+    if not db_path:
+        db_path = _safe_config_value(
+            persistence_config,
+            "spool_db_path",
+            None,
+        )
+
+    if not db_path:
+        return None
+
+    def _coerce_float(
+        raw: Any,
+        default: float | None,
+    ) -> float | None:
+        if raw is None:
+            return default
+
+        try:
+            value = float(raw)
+        except Exception:
+            return default
+
+        if value < 0:
+            return default
+
+        return value
+
+    ttl_seconds = _coerce_float(
+        _safe_config_value(
+            config,
+            "persistence.idempotency_ttl_seconds",
+            None,
+        ),
+        None,
+    )
+
+    in_progress_ttl_seconds = _coerce_float(
+        _safe_config_value(
+            config,
+            "persistence.idempotency_in_progress_ttl_seconds",
+            600.0,
+        ),
+        600.0,
+    )
+
+    try:
+        return SQLiteIdempotencyStore(
+            db_path,
+            ttl_seconds=ttl_seconds,
+            in_progress_ttl_seconds=in_progress_ttl_seconds,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to initialize SQLite idempotency store.",
+        )
+        return None
 
 
 def _validate_canonical_kafka_config(config) -> None:
@@ -420,6 +517,11 @@ def main() -> None:
                 poll_timeout_sec=float(
                     config.get("app.worker_poll_timeout_sec", 1.0)
                 ),
+                idempotency_store=_build_idempotency_store(
+                    config,
+                    app_logger,
+                ),
+                close_idempotency_store=True,
             )
             # ساخت AgentWorker با اجراکننده فرمان، transport و زمان انتظار poll
 

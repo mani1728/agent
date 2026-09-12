@@ -19,6 +19,7 @@ from agent.reliability.circuit_breaker import (
 )
 from agent.reliability.idempotency import (
     IdempotencyError,
+    IdempotencyStore,
     IdempotencyManager,
     IdempotencyState,
     fingerprint_payload,
@@ -111,8 +112,10 @@ class AgentWorker:
         reliability_config: Optional[Mapping[str, Any]] = None,
         retry_executor: RetryExecutor | None = None,
         delivery_retry_executor: RetryExecutor | None = None,
+        idempotency_store: IdempotencyStore | None = None,
         idempotency_manager: IdempotencyManager | None = None,
         circuit_breaker: CircuitBreaker | None = None,
+        close_idempotency_store: bool = False,
     ) -> None:
         if not isinstance(command_executor, CommandExecutor):
             raise TypeError(
@@ -180,7 +183,17 @@ class AgentWorker:
         self._idempotency_manager = (
             idempotency_manager
             if idempotency_manager is not None
-            else IdempotencyManager()
+            else IdempotencyManager(store=idempotency_store)
+        )
+        self._idempotency_store = (
+            idempotency_manager.store
+            if idempotency_manager is not None
+            else idempotency_store
+        )
+        self._close_idempotency_store = (
+            close_idempotency_store
+            and self._idempotency_store is not None
+            and idempotency_manager is None
         )
 
         self._circuit_breaker = circuit_breaker or self._build_circuit_breaker()
@@ -300,7 +313,29 @@ class AgentWorker:
             with self._state_lock:
                 self._state = WorkerState.STOPPED
 
+        self._close_persistence_if_needed()
+
         logger.info("Agent worker stopped")
+
+    def _close_persistence_if_needed(self) -> None:
+        if not self._close_idempotency_store:
+            return
+
+        store = self._idempotency_store
+
+        if store is None:
+            return
+
+        close_method = getattr(store, "close", None)
+
+        if callable(close_method):
+            try:
+                close_method()
+            except Exception:
+                logger.debug(
+                    "Failed to close idempotency store.",
+                    exc_info=True,
+                )
 
     # ------------------------------------------------------------------
     # Main loop
