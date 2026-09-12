@@ -29,7 +29,7 @@ from agent.reliability.retry import (
     RetryExecutor,
     RetryPolicy,
 )
-from agent.transport.base import ITransportClient
+from agent.transport.base import AckToken, ITransportClient
 
 
 logger = logging.getLogger(__name__)
@@ -468,7 +468,14 @@ class AgentWorker:
 
         try:
             if self._transport is not None:
-                self._transport.ack_command(command.command_id)
+                ack_token = AckToken(
+                    command_id=command.command_id,
+                    ref=getattr(command, "transport_ref", None),
+                )
+                self._transport.ack_command(
+                    command.command_id,
+                    ack_token=ack_token,
+                )
         except Exception:
             logger.exception(
                 "Command acknowledgement failed: command_id=%s",
