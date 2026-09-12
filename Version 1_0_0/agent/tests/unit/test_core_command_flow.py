@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 import sys
 import types
+import time
+import threading
 
 from agent.contracts.command import CommandEnvelope
 from agent.contracts.response import ResponseEnvelope, ResponseStatus
@@ -239,12 +241,97 @@ class _RecordingExecutor(__import__("agent.core.command_executor", fromlist=["Co
         return response
 
 
+class _PlanExecutor(__import__("agent.core.command_executor", fromlist=["CommandExecutor"]).CommandExecutor):
+    def __init__(self, events, *, plan):
+        from agent.core.command_executor import CommandExecutor
+        super().__init__(
+            dispatcher=_SpyDispatcher(),
+            authorizer=CommandAuthorizer(rules=(), default_allow=True),
+        )
+        self.events = events
+        self._plan = list(plan)
+
+    def execute(self, command):
+        self.events.append("execute")
+
+        if self._plan:
+            outcome = self._plan.pop(0)
+
+            if isinstance(outcome, BaseException):
+                raise outcome
+
+            if isinstance(outcome, ResponseEnvelope):
+                return outcome
+
+        return ResponseEnvelope.success(
+            correlation_id=command.correlation_id,
+            data={"ok": True},
+        )
+
+
+class _SingleExecutionExecutor(__import__("agent.core.command_executor", fromlist=["CommandExecutor"]).CommandExecutor):
+    def __init__(self, events):
+        super().__init__(
+            dispatcher=_SpyDispatcher(),
+            authorizer=CommandAuthorizer(rules=(), default_allow=True),
+        )
+        self.events = events
+
+    def execute(self, command):
+        self.events.append("execute")
+        if self.events.count("execute") > 1:
+            raise RuntimeError("unexpected second execution")
+
+        return ResponseEnvelope.success(
+            correlation_id=command.correlation_id,
+            data={"ok": True},
+            metadata={"result": "single"},
+        )
+
+
+class _BlockingExecutor(__import__("agent.core.command_executor", fromlist=["CommandExecutor"]).CommandExecutor):
+    def __init__(self, events, *, plan, start_event, release_event):
+        super().__init__(
+            dispatcher=_SpyDispatcher(),
+            authorizer=CommandAuthorizer(rules=(), default_allow=True),
+        )
+        self.events = events
+        self._plan = list(plan)
+        self._start_event = start_event
+        self._release_event = release_event
+        self._started_once = False
+
+    def execute(self, command):
+        self.events.append("execute")
+
+        if not self._started_once:
+            self._start_event.set()
+            self._started_once = True
+            self._release_event.wait()
+
+        if self._plan:
+            outcome = self._plan.pop(0)
+
+            if isinstance(outcome, BaseException):
+                raise outcome
+
+            if isinstance(outcome, ResponseEnvelope):
+                return outcome
+
+        return ResponseEnvelope.success(
+            correlation_id=command.correlation_id,
+            data={"ok": True},
+        )
+
+
 class _RecordingTransport(__import__("agent.transport.base", fromlist=["ITransportClient"]).ITransportClient):
-    def __init__(self, events, commands, *, response_ok=True):
+    def __init__(self, events, commands, *, response_ok=True, response_plan=None):
         self.events = events
         self.commands = list(commands)
         self.response_ok = response_ok
+        self._response_plan = list(response_plan) if response_plan is not None else None
         self.acks = []
+        self.published_responses = []
         self.started = False
         self.stopped = False
 
@@ -256,7 +343,18 @@ class _RecordingTransport(__import__("agent.transport.base", fromlist=["ITranspo
         self._stop_after_poll = True
         return []
     def send_response(self, response):
+        self.published_responses.append(response)
         self.events.append("response")
+
+        if self._response_plan is not None:
+            if not self._response_plan:
+                return self.response_ok
+
+            outcome = self._response_plan.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return bool(outcome)
+
         return self.response_ok
     def send_heartbeat(self, heartbeat): return True
     def ack_command(self, command_id):
@@ -266,11 +364,15 @@ class _RecordingTransport(__import__("agent.transport.base", fromlist=["ITranspo
 
 
 class TestP0WorkerFlow(unittest.TestCase):
-    def _command(self, method="manage_connection"):
-        return CommandEnvelope.from_dict({
+    def _command(self, method="manage_connection", command_id=None):
+        payload = {
             "target_class": "Mt5_Manager",
             "target_method": method,
-        })
+        }
+        if command_id is not None:
+            payload["command_id"] = command_id
+
+        return CommandEnvelope.from_dict(payload)
 
     def test_execute_response_ack_order(self):
         from agent.core.worker import AgentWorker
@@ -286,10 +388,271 @@ class TestP0WorkerFlow(unittest.TestCase):
         events = []
         command = self._command()
         transport = _RecordingTransport(events, [command], response_ok=False)
-        worker = AgentWorker(_RecordingExecutor(events), transport)
+        worker = AgentWorker(
+            _RecordingExecutor(events),
+            transport,
+            reliability_config={
+                "delivery_retry": {
+                    "max_attempts": 1,
+                }
+            },
+        )
         worker.start()
         worker.run_once()
         self.assertEqual(events, ["execute", "response"])
+        self.assertEqual(transport.acks, [])
+
+    def test_execute_idempotent_transient_retry(self):
+        from agent.core.worker import AgentWorker
+        events = []
+        command = self._command()
+        transport = _RecordingTransport(events, [command])
+        executor = _PlanExecutor(
+            events,
+            plan=(TimeoutError("temporary"), TimeoutError("temporary")),
+        )
+        worker = AgentWorker(
+            executor,
+            transport,
+            reliability_config={
+                "command_retry": {"max_attempts": 3},
+                "command_retry_exceptions": (TimeoutError,),
+            },
+        )
+        worker.start()
+        worker.run_once()
+        self.assertEqual(events.count("execute"), 3)
+        self.assertEqual(events, ["execute", "execute", "execute", "response", "ack", "commit"])
+
+    def test_execute_retry_limits(self):
+        from agent.core.worker import AgentWorker
+        events = []
+        command = self._command(command_id="retry-limit")
+        transport = _RecordingTransport(events, [command])
+        executor = _PlanExecutor(
+            events,
+            plan=(TimeoutError("temporary"), TimeoutError("temporary"), TimeoutError("temporary")),
+        )
+        worker = AgentWorker(
+            executor,
+            transport,
+            reliability_config={
+                "command_retry": {"max_attempts": 2},
+                "command_retry_exceptions": (TimeoutError,),
+            },
+        )
+        worker.start()
+        worker.run_once()
+        self.assertEqual(events.count("execute"), 2)
+        self.assertEqual(transport.acks, [])
+        self.assertIsNone(worker._idempotency_manager.get(command.command_id))
+
+    def test_permanent_execution_error_is_not_retried(self):
+        from agent.core.worker import AgentWorker
+        events = []
+        command = self._command()
+        transport = _RecordingTransport(events, [command])
+        executor = _PlanExecutor(
+            events,
+            plan=(ValueError("permanent failure"),),
+        )
+        worker = AgentWorker(
+            executor,
+            transport,
+            reliability_config={
+                "command_retry": {"max_attempts": 4},
+            },
+        )
+        worker.start()
+        worker.run_once()
+        self.assertEqual(events.count("execute"), 1)
+        self.assertEqual(transport.acks, [])
+
+    def test_backoff_stop_request_aborts_retry_wait(self):
+        from agent.core.worker import AgentWorker
+        events = []
+        command = self._command(command_id="retry-stop")
+        transport = _RecordingTransport(events, [command])
+        executor = _PlanExecutor(
+            events,
+            plan=(TimeoutError("temporary"), TimeoutError("temporary")),
+        )
+        worker = AgentWorker(
+            executor,
+            transport,
+            reliability_config={
+                "command_retry": {
+                    "max_attempts": 3,
+                    "base_delay_seconds": 10,
+                    "max_delay_seconds": 20,
+                },
+                "command_retry_exceptions": (TimeoutError,),
+            },
+        )
+        worker.start()
+
+        thread = threading.Thread(target=worker.run_once)
+        thread.start()
+
+        time.sleep(0.05)
+        worker.request_stop()
+
+        thread.join(timeout=1.5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(events.count("execute"), 1)
+
+    def test_duplicate_completed_command_replays_without_reexecution(self):
+        from agent.core.worker import AgentWorker
+        events = []
+        command = self._command(command_id="dup-replay")
+        transport = _RecordingTransport(events, [command, command])
+        executor = _SingleExecutionExecutor(events)
+        worker = AgentWorker(
+            executor,
+            transport,
+        )
+        worker.start()
+        worker.run_once()
+        worker.run_once()
+        self.assertEqual(events.count("execute"), 1)
+        self.assertEqual(events, ["execute", "response", "ack", "commit", "response", "ack", "commit"])
+
+    def test_duplicate_completed_command_publish_failure_for_replay_halts_ack(self):
+        from agent.core.worker import AgentWorker
+        events = []
+        command = self._command(command_id="dup-failed-delivery")
+        transport = _RecordingTransport(
+            events,
+            [command, command],
+            response_plan=(True, False),
+        )
+        executor = _SingleExecutionExecutor(events)
+        worker = AgentWorker(
+            executor,
+            transport,
+            reliability_config={
+                "delivery_retry": {
+                    "max_attempts": 1,
+                },
+            },
+        )
+        worker.start()
+        worker.run_once()
+        worker.run_once()
+        self.assertEqual(events.count("execute"), 1)
+        self.assertEqual(transport.acks, [command.command_id])
+
+    def test_delivery_retry_attempts_and_commit_guard(self):
+        from agent.core.worker import AgentWorker
+        events = []
+        command = self._command()
+        transport = _RecordingTransport(
+            events,
+            [command],
+            response_plan=(False, False, True),
+        )
+        worker = AgentWorker(
+            _RecordingExecutor(events),
+            transport,
+            reliability_config={
+                "delivery_retry": {
+                    "max_attempts": 3,
+                    "base_delay_seconds": 0,
+                },
+            },
+        )
+        worker.start()
+        worker.run_once()
+        self.assertEqual(len([event for event in events if event == "response"]), 3)
+        self.assertEqual(transport.acks, [command.command_id])
+
+    def test_delivery_retry_is_bounded(self):
+        from agent.core.worker import AgentWorker
+        events = []
+        command = self._command(command_id="delivery-limit")
+        transport = _RecordingTransport(
+            events,
+            [command],
+            response_plan=(False, False, True),
+        )
+        worker = AgentWorker(
+            _RecordingExecutor(events),
+            transport,
+            reliability_config={
+                "delivery_retry": {
+                    "max_attempts": 2,
+                },
+            },
+        )
+        worker.start()
+        worker.run_once()
+        self.assertEqual(len([event for event in events if event == "response"]), 2)
+        self.assertEqual(transport.acks, [])
+
+    def test_in_progress_duplicate_prevents_concurrent_execute(self):
+        from agent.core.worker import AgentWorker
+        events = []
+        started = threading.Event()
+        proceed = threading.Event()
+        command = self._command(command_id="in-progress")
+        executor = _BlockingExecutor(
+            events,
+            plan=(),
+            start_event=started,
+            release_event=proceed,
+        )
+        transport = _RecordingTransport(events, [command, command])
+        worker = AgentWorker(
+            executor,
+            transport,
+            reliability_config={
+                "command_retry": {"max_attempts": 1},
+            },
+        )
+        worker.start()
+
+        thread1 = threading.Thread(
+            target=worker._process_command,
+            args=(command,),
+        )
+        thread2 = threading.Thread(
+            target=worker._process_command,
+            args=(command,),
+        )
+
+        thread1.start()
+        self.assertTrue(started.wait(1.0))
+        thread2.start()
+
+        thread2.join(timeout=1.0)
+        proceed.set()
+
+        thread1.join(timeout=2.0)
+        self.assertEqual(events.count("execute"), 1)
+        self.assertEqual(len([event for event in events if event == "response"]), 2)
+        self.assertIn(command.command_id, transport.acks)
+    def test_delivery_retry_stopped_by_shutdown(self):
+        from agent.core.worker import AgentWorker
+        events = []
+        command = self._command()
+        transport = _RecordingTransport(
+            events,
+            [command],
+            response_plan=(False, False, False),
+        )
+        worker = AgentWorker(
+            _RecordingExecutor(events),
+            transport,
+            reliability_config={
+                "delivery_retry": {
+                    "max_attempts": 3,
+                },
+            },
+        )
+        worker.start()
+        worker.request_stop()
+        worker.run_once()
+        self.assertEqual(events.count("response"), 1)
         self.assertEqual(transport.acks, [])
 
     def test_execute_exception_does_not_ack_and_worker_can_continue(self):
@@ -304,6 +667,77 @@ class TestP0WorkerFlow(unittest.TestCase):
         worker.run_once()
         self.assertEqual(events, ["execute", "response", "execute", "response"])
         self.assertEqual(transport.acks, [])
+
+    def test_command_failure_is_not_marked_as_completed(self):
+        from agent.core.worker import AgentWorker
+        events = []
+        command = self._command(command_id="failed-not-complete")
+        transport = _RecordingTransport(events, [command])
+        executor = _PlanExecutor(
+            events,
+            plan=(RuntimeError("temporary"),),
+        )
+        worker = AgentWorker(
+            executor,
+            transport,
+            reliability_config={
+                "command_retry": {
+                    "max_attempts": 1,
+                },
+            },
+        )
+        worker.start()
+        worker.run_once()
+        self.assertIsNone(worker._idempotency_manager.get(command.command_id))
+
+    def test_circuit_breaker_closed_open_half_open(self):
+        from agent.core.worker import AgentWorker
+        from agent.reliability.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
+
+        events = []
+        command = self._command(command_id="breaker-test")
+        transport = _RecordingTransport(events, [command, command, command])
+        executor = _PlanExecutor(
+            events,
+            plan=(RuntimeError("temporary"), ResponseEnvelope.success(
+                correlation_id=command.correlation_id,
+                data={"ok": True},
+            )),
+        )
+
+        clock = {"now": 0.0}
+
+        breaker = CircuitBreaker(
+            config=CircuitBreakerConfig(
+                failure_threshold=1,
+                recovery_timeout_seconds=5.0,
+                success_threshold=1,
+            ),
+            clock=lambda: clock["now"],
+        )
+
+        worker = AgentWorker(
+            executor,
+            transport,
+            reliability_config={
+                "command_retry": {"max_attempts": 1},
+            },
+            circuit_breaker=breaker,
+        )
+        worker.start()
+
+        worker.run_once()
+        self.assertEqual(events.count("execute"), 1)
+        self.assertTrue(breaker.is_open)
+
+        worker.run_once()
+        self.assertEqual(events.count("execute"), 1)
+
+        clock["now"] += 10.0
+        self.assertTrue(breaker.is_half_open)
+        worker.run_once()
+        self.assertEqual(events.count("execute"), 2)
+        self.assertTrue(breaker.is_closed)
 
 
 class TestP0KafkaSemantics(unittest.TestCase):
