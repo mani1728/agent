@@ -36,3 +36,4 @@ Version 1_0_0/agent/docs/
 *.bak
 *.saved.bak
 *backup*
+*.zip
