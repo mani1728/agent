@@ -1,8 +1,8 @@
 # Path: Version 1_0_0/agent/main.py
-# مسیر فایل: نقطه ورود اصلی برنامه (سازگار با نسخه قدیمی + مسیر canonical worker)
+# مسیر فایل: نقطه ورود اصلی برنامه (سازگار با مسیر قدیمی و مسیر استاندارد Worker)
 
 # -*- coding: utf-8 -*-
-# تعیین کدگذاری فایل به UTF-8 برای پشتیبانی کامل از کاراکترهای فارسی و سایر زبان‌ها
+# تعیین کدگذاری UTF-8 برای پشتیبانی کامل از فارسی و کاراکترهای چندزبانه
 
 """
 main.py
@@ -15,24 +15,15 @@ Migration status:
 - Legacy hot-reload configuration is intentionally preserved.
 - Legacy signal/shutdown behavior is intentionally preserved.
 - AgentWorker is the canonical/default runtime; legacy listener remains compatibility-only.
-- Transport migration will be introduced incrementally in later phases.
-
-Current responsibility:
-1) Load hot-reload configuration from config.json.
-2) Configure logging.
-3) Register the client through ClientAuth.
-4) Start ClientAuth heartbeat.
-5) Update runtime Kafka topics after registration.
-6) Start KafkaListener or AgentWorker (feature-flag driven).
-7) Wait for shutdown.
-8) Stop command runtime and ClientAuth cleanly.
+- Transport migration is incremental and backward-compatible.
 """
-# این docstring وضعیت مهاجرت و مسئولیت‌های اصلی فایل را توضیح می‌دهد.
-# نکته مهم: مسیر Worker مسیر استاندارد است، ولی مسیر Listener قدیمی برای سازگاری هنوز باقی است.
+# این docstring مشخص می‌کند که:
+# 1) رفتارهای legacy نگه داشته شده‌اند
+# 2) مسیر استاندارد، AgentWorker است
+# 3) مهاجرت تدریجی و سازگار با نسخه‌های قبلی انجام می‌شود
 
 from __future__ import annotations
-# فعال‌سازی postponed evaluation برای type hints
-# (برای سازگاری بهتر و جلوگیری از برخی مشکلات وابستگی دوری)
+# فعال‌سازی ارزیابی تأخیری type hintها برای سازگاری بهتر importها
 
 # ======================================================================
 # Standard library
@@ -43,34 +34,34 @@ import getpass
 # برای دریافت نام کاربر سیستم‌عامل
 
 import logging
-# زیرساخت لاگ‌گیری استاندارد پایتون
+# برای ثبت لاگ در سطوح مختلف
 
 import platform
-# برای دریافت اطلاعات سیستم‌عامل
+# برای خواندن اطلاعات سیستم‌عامل
 
 import signal
-# برای مدیریت سیگنال‌های OS مثل SIGINT/SIGTERM
+# برای مدیریت سیگنال‌های shutdown مثل Ctrl+C
 
 import sys
-# برای دسترسی به اطلاعات مفسر پایتون و محیط اجرا
+# برای اطلاعات runtime پایتون
 
 import threading
-# برای ساخت و مدیریت Thread
+# برای اجرای worker/listener روی Thread جدا
 
 import time
-# برای sleep و کنترل حلقه انتظار
+# برای sleep در حلقه انتظار اصلی
 
 from typing import Any
-# برای تایپ Any (در توابع helper استفاده می‌شود)
+# برای استفاده از Any در type hintها
 
 
 # ======================================================================
 # Application dependencies
 # ======================================================================
-# وابستگی‌های داخلی برنامه (با پشتیبانی از دو حالت import)
+# وابستگی‌های داخلی اپلیکیشن با پشتیبانی از دو حالت اجرا
 
 try:  # Package-safe execution: python -m agent
-    # حالت پیشنهادی اجرا: به‌صورت پکیج
+    # حالت اجرای پکیجی (پیشنهادی)
     from .core.command_executor import CommandExecutor
     from .core.worker import AgentWorker
     from .infrastructure.config_logging import setup_logging
@@ -79,7 +70,7 @@ try:  # Package-safe execution: python -m agent
     from .transport.factory import TransportFactory
     from .reliability.idempotency import SQLiteIdempotencyStore
 except ImportError:  # Direct execution compatibility: python agent/main.py
-    # حالت سازگاری با اجرای مستقیم فایل
+    # حالت اجرای مستقیم فایل برای سازگاری
     from agent.core.command_executor import CommandExecutor
     from agent.core.worker import AgentWorker
     from agent.infrastructure.config_logging import setup_logging
@@ -89,7 +80,7 @@ except ImportError:  # Direct execution compatibility: python agent/main.py
     from agent.reliability.idempotency import SQLiteIdempotencyStore
 
 try:
-    # Listener قدیمی فقط برای compatibility path
+    # Listener قدیمی اختیاری است (فقط برای compatibility path)
     from .transport.kafka.listener import KafkaListener as _KafkaListener
 except Exception:  # pragma: no cover - optional dependency
     # اگر dependency موجود نبود، مسیر legacy listener غیرفعال می‌شود
@@ -99,80 +90,112 @@ except Exception:  # pragma: no cover - optional dependency
 # ======================================================================
 # Global shutdown event
 # ======================================================================
-# رویداد سراسری برای مدیریت shutdown هماهنگ کل برنامه
+# رویداد سراسری shutdown برای کنترل خاموش شدن تمیز
 
 _shutdown_event = threading.Event()
-# وقتی set شود، حلقه اصلی main باید فرآیند خاموش شدن را آغاز کند
+# وقتی set شود، حلقه اصلی main وارد مسیر shutdown می‌شود
 
 
 # ======================================================================
 # ClientAuth logging bridge
 # ======================================================================
-# پل لاگ برای هماهنگ کردن خروجی ClientAuth با logging استاندارد
+# پل لاگ: خروجی ClientAuth را به logging استاندارد برنامه وصل می‌کند
 
-def _clientauth_logger(
-    level: str,
-    msg: str,
-    **kw: Any,
-) -> None:
+def _clientauth_logger(level: str, msg: str, **kw: Any) -> None:
     """
-    Bridge ClientAuth logging into Python's standard logging system.
+    Bridge ClientAuth logging into Python logging.
     """
-    # سطح لاگ رشته‌ای را به سطح واقعی logging نگاشت می‌کند.
+    # تبدیل سطح لاگ رشته‌ای به مقدار معتبر logging
     lvl = getattr(logging, str(level).upper(), logging.INFO)
 
-    # اگر kwargs داشته باشیم، به پیام اضافه می‌کنیم تا context حفظ شود.
+    # افزودن kwargs به پیام برای حفظ context
     message = f"{msg} | {kw}" if kw else msg
 
-    # لاگ نهایی داخل logger اختصاصی ClientAuth ثبت می‌شود.
+    # ثبت لاگ در logger اختصاصی ClientAuth
     logging.getLogger("ClientAuth").log(lvl, message)
 
 
 # ======================================================================
 # Signal handling
 # ======================================================================
-# مدیریت سیگنال‌های سیستم‌عامل (Ctrl+C و SIGTERM)
+# مدیریت سیگنال‌های سیستم‌عامل
 
-def _handle_signal(
-    signum: int,
-    frame: Any,
-) -> None:
+def _handle_signal(signum: int, frame: Any) -> None:
     """
     Request application shutdown.
     """
-    # لاگ دریافت سیگنال برای audit/diagnostics
+    # ثبت دریافت سیگنال در لاگ
     logging.getLogger("App").info(
         "Shutdown signal received",
         extra={"signum": signum},
     )
 
-    # فقط shutdown event را set می‌کنیم؛ cleanup کامل در finallyِ main انجام می‌شود.
+    # فعال‌کردن فلگ shutdown
     _shutdown_event.set()
 
 
 def _config_bool(config: Any, path: str, default: bool = False) -> bool:
     """
-    Read a JSON-compatible boolean without treating "false" as True.
+    Read boolean safely from config without 'false' string pitfall.
     """
-    # مقدار raw را از config می‌خوانیم.
+    # خواندن مقدار خام
     value = config.get(path, default)
 
-    # اگر رشته بود، تبدیل امن و صریح انجام می‌دهیم.
+    # اگر رشته باشد، به‌صورت صریح parse می‌کنیم
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
 
-    # در غیر این صورت cast استاندارد به bool
+    # در غیر این صورت cast مستقیم
     return bool(value)
 
 
 def _safe_config_value(config: Any, path: str, default: Any = None) -> Any:
     """
-    Safely read config value, fallback to default on any access error.
+    Safe config reader (never raises).
     """
+    # تلاش برای خواندن مقدار
     try:
         return config.get(path, default)
     except Exception:
+        # در هر خطا، مقدار پیش‌فرض بازگردانده می‌شود
         return default
+
+
+def _normalize_kafka_topics(config: Any, logger: logging.Logger) -> None:
+    """
+    Normalize topic schema into canonical kafka.topics.commands list.
+
+    Supported inputs:
+    - kafka.topics.commands (preferred)
+    - topics.command_p0 / topics.command_p1 / topics.command_p2 (legacy/global)
+    """
+    # ابتدا ساختار canonical را می‌خوانیم
+    existing = _safe_config_value(config, "kafka.topics.commands", None)
+
+    # اگر canonical از قبل معتبر باشد، کاری نمی‌کنیم
+    if isinstance(existing, (list, tuple)) and any(str(x).strip() for x in existing):
+        return
+
+    # fallback از ساختار topics.command_p*
+    p0 = _safe_config_value(config, "topics.command_p0", None)
+    p1 = _safe_config_value(config, "topics.command_p1", None)
+    p2 = _safe_config_value(config, "topics.command_p2", None)
+
+    # لیست‌سازی با حذف مقادیر خالی
+    derived = [str(x).strip() for x in (p0, p1, p2) if x is not None and str(x).strip()]
+
+    # اگر چیزی پیدا شد، canonical را پر می‌کنیم
+    if derived:
+        try:
+            config._data.setdefault("kafka", {})
+            config._data["kafka"].setdefault("topics", {})
+            config._data["kafka"]["topics"]["commands"] = derived
+            logger.info(
+                "Kafka command topics normalized into kafka.topics.commands",
+                extra={"commands": derived},
+            )
+        except Exception:
+            logger.exception("Failed to normalize Kafka command topics")
 
 
 def _build_idempotency_store(
@@ -180,31 +203,26 @@ def _build_idempotency_store(
     logger: logging.Logger,
 ) -> SQLiteIdempotencyStore | None:
     """
-    Build SQLite idempotency store if a valid db_path is available.
+    Build SQLite idempotency store from persistence/reliability config.
     """
-    # ابتدا بخش persistence را می‌خوانیم (اگر نبود، دیکشنری خالی)
+    # خواندن بخش‌های احتمالی تنظیمات
     persistence_config = _safe_config_value(config, "persistence", {})
+    reliability_config = _safe_config_value(config, "reliability", {})
 
-    # اولویت اول: مسیر صریح idempotency DB
+    # مسیر DB با چند fallback
     db_path = _safe_config_value(config, "persistence.idempotency_db_path", None)
-
-    # fallback از زیرشاخه persistence
     if not db_path:
         db_path = _safe_config_value(persistence_config, "idempotency_db_path", None)
-
-    # fallback تاریخی: spool_db_path
     if not db_path:
         db_path = _safe_config_value(config, "persistence.spool_db_path", None)
-
-    # fallback spool داخل persistence
     if not db_path:
         db_path = _safe_config_value(persistence_config, "spool_db_path", None)
 
-    # اگر هیچ path معتبری نبود، store نمی‌سازیم.
+    # اگر DB path نداریم، store ساخته نمی‌شود
     if not db_path:
         return None
 
-    # helper داخلی برای parse امن float
+    # تبدیل امن float
     def _coerce_float(raw: Any, default: float | None) -> float | None:
         if raw is None:
             return default
@@ -216,23 +234,35 @@ def _build_idempotency_store(
             return default
         return value
 
-    # TTL کلی رکوردها
+    # TTL اصلی:
+    # اولویت با persistence.idempotency_ttl_seconds
+    # fallback به reliability.idempotency_ttl_sec
     ttl_seconds = _coerce_float(
         _safe_config_value(config, "persistence.idempotency_ttl_seconds", None),
         None,
     )
+    if ttl_seconds is None:
+        ttl_seconds = _coerce_float(
+            _safe_config_value(reliability_config, "idempotency_ttl_sec", None),
+            None,
+        )
 
-    # TTL رکوردهای in-progress (پیش‌فرض 600 ثانیه)
+    # TTL رکوردهای in-progress:
+    # اولویت با persistence.idempotency_in_progress_ttl_seconds
+    # fallback به reliability.in_progress_ttl_sec
     in_progress_ttl_seconds = _coerce_float(
-        _safe_config_value(
-            config,
-            "persistence.idempotency_in_progress_ttl_seconds",
-            600.0,
-        ),
-        600.0,
+        _safe_config_value(config, "persistence.idempotency_in_progress_ttl_seconds", None),
+        None,
     )
+    if in_progress_ttl_seconds is None:
+        in_progress_ttl_seconds = _coerce_float(
+            _safe_config_value(reliability_config, "in_progress_ttl_sec", None),
+            None,
+        )
+    if in_progress_ttl_seconds is None:
+        in_progress_ttl_seconds = 600.0
 
-    # ساخت store با handling خطا
+    # ساخت Store
     try:
         return SQLiteIdempotencyStore(
             db_path,
@@ -246,9 +276,9 @@ def _build_idempotency_store(
 
 def _validate_canonical_kafka_config(config: Any) -> None:
     """
-    Validate minimum operational Kafka settings for the worker path.
+    Validate minimum operational Kafka settings for worker path.
     """
-    # کلیدهای ضروری برای runtime استاندارد worker + kafka
+    # خواندن کلیدهای ضروری
     required = {
         "kafka.bootstrap_servers": config.get("kafka.bootstrap_servers", None),
         "kafka.group_id": config.get("kafka.group_id", None),
@@ -257,7 +287,7 @@ def _validate_canonical_kafka_config(config: Any) -> None:
 
     missing: list[str] = []
 
-    # بررسی مقادیر خالی/نامعتبر
+    # اعتبارسنجی خالی نبودن
     for key, value in required.items():
         if isinstance(value, (list, tuple)):
             if not any(str(item).strip() for item in value):
@@ -265,7 +295,7 @@ def _validate_canonical_kafka_config(config: Any) -> None:
         elif value is None or not str(value).strip():
             missing.append(key)
 
-    # در مسیر canonical، auto commit باید قطعاً false باشد.
+    # auto-commit باید false باشد
     auto_commit = config.get("kafka.enable_auto_commit", None)
     auto_commit_is_false = (
         auto_commit is False
@@ -277,61 +307,56 @@ def _validate_canonical_kafka_config(config: Any) -> None:
     if not auto_commit_is_false:
         missing.append("kafka.enable_auto_commit=false")
 
-    # اگر چیزی missing بود، startup را fail-fast می‌کنیم.
+    # اگر مورد ناقص وجود داشت، fail-fast
     if missing:
         raise RuntimeError(
-            "Canonical Kafka runtime configuration is not operationally "
-            "configured; missing required settings: " + ", ".join(missing)
+            "Canonical Kafka runtime configuration is not operationally configured; "
+            "missing required settings: " + ", ".join(missing)
         )
 
 
 # ======================================================================
 # Main application entry point
 # ======================================================================
-# نقطه ورود اصلی برنامه
+# تابع اصلی راه‌اندازی/توقف برنامه
 
 def main() -> None:
     """
     Legacy-compatible startup/shutdown sequence with canonical worker path.
     """
-    # ------------------------------------------------------------------
-    # 1) Reset shutdown state
-    # ------------------------------------------------------------------
+    # ریست فلگ shutdown
     _shutdown_event.clear()
 
-    # ------------------------------------------------------------------
-    # 2) Load hot-reload configuration
-    # ------------------------------------------------------------------
+    # بارگذاری تنظیمات hot-reload
     config = cfg()
 
-    # ------------------------------------------------------------------
-    # 3) Configure logging
-    # ------------------------------------------------------------------
+    # تنظیم لاگ
     setup_logging(config)
     app_logger = logging.getLogger("App")
     app_logger.info("Application bootstrap started (hot-reload config enabled).")
 
-    # ------------------------------------------------------------------
-    # 4) Client registration / heartbeat (legacy-preserved behavior)
-    # ------------------------------------------------------------------
+    # نرمال‌سازی topicها قبل از هر validation
+    _normalize_kafka_topics(config, app_logger)
+
+    # ClientAuth (مسیر legacy-preserved)
     ca = None
     try:
-        # متادیتای runtime برای register شدن در gateway/auth
+        # متادیتای کلاینت
         meta = {
             "os": platform.platform(),
             "username": getpass.getuser(),
             "python": sys.version.split()[0],
-            "agent_version": "0.1.0",
+            "agent_version": "1.0.0",
             "capabilities": ["mt5", "reports"],
         }
 
-        # ساخت ClientAuth و اتصال لاگ bridge
+        # ساخت auth client
         ca = ClientAuth(client_meta=meta, logger=_clientauth_logger)
 
-        # ثبت کلاینت + heartbeat
+        # register + heartbeat
         ca.register()
 
-        # بعد از ثبت موفق، تاپیک‌های kafka با client_id واقعی آپدیت می‌شوند.
+        # بعد از register موفق، topicها و group_id با client_id واقعی به‌روز می‌شوند
         try:
             config._data.setdefault("kafka", {})["client_id"] = ca.client_id
 
@@ -353,16 +378,12 @@ def main() -> None:
             app_logger.exception("Failed to update topics after registration")
 
     except Exception:
-        # رفتار قدیمی حفظ می‌شود: خطای ثبت فقط لاگ می‌شود، crash فوری نداریم.
+        # رفتار legacy: شکست register فقط لاگ می‌شود
         app_logger.exception("Client registration failed")
 
-    # ------------------------------------------------------------------
-    # 5) Kafka enabled guard
-    # ------------------------------------------------------------------
+    # guard: kafka.enabled
     if not bool(config.get("kafka.enabled", True)):
-        app_logger.warning(
-            "Kafka is disabled by config (kafka.enabled=false). Exiting main."
-        )
+        app_logger.warning("Kafka is disabled by config (kafka.enabled=false). Exiting main.")
         try:
             if ca:
                 ca.stop()
@@ -370,9 +391,7 @@ def main() -> None:
             app_logger.exception("Failed to stop ClientAuth")
         return
 
-    # ------------------------------------------------------------------
-    # 6) Choose runtime path by feature flag
-    # ------------------------------------------------------------------
+    # انتخاب مسیر runtime با feature flag
     use_agent_worker = _config_bool(config, "app.use_agent_worker", True)
 
     listener = None
@@ -399,9 +418,10 @@ def main() -> None:
                 name="AgentWorker",
                 daemon=True,
             )
+
             app_logger.info("AgentWorker path selected by feature flag")
         else:
-            # مسیر compatibility
+            # مسیر legacy listener
             if _KafkaListener is None:
                 raise RuntimeError(
                     "Kafka listener dependency is unavailable (missing runtime dependency)"
@@ -414,48 +434,46 @@ def main() -> None:
                 name="KafkaListener",
                 daemon=True,
             )
+
             app_logger.info("Legacy KafkaListener path selected")
 
     except Exception:
+        # خطا در bootstrap مسیر اجرایی
         app_logger.exception("Failed to initialize selected runtime path")
+
+        # cleanup ClientAuth در صورت نیاز
         try:
             if ca:
                 ca.stop()
         except Exception:
             app_logger.exception("Failed to stop ClientAuth")
+
+        # re-raise برای fail-fast
         raise
 
-    # ------------------------------------------------------------------
-    # 7) Register OS signal handlers
-    # ------------------------------------------------------------------
+    # ثبت handler سیگنال‌ها
     signal.signal(signal.SIGINT, _handle_signal)
     try:
         signal.signal(signal.SIGTERM, _handle_signal)
     except Exception:
-        # روی بعضی runtime های ویندوز ممکن است SIGTERM پشتیبانی نشود.
+        # روی برخی runtimeهای ویندوز SIGTERM ممکن است پشتیبانی نشود
         pass
 
-    # ------------------------------------------------------------------
-    # 8) Start runtime thread
-    # ------------------------------------------------------------------
+    # شروع Thread مسیر اجرایی
     runtime_thread.start()
     app_logger.info("Runtime path started: worker_enabled=%s", use_agent_worker)
 
-    # ------------------------------------------------------------------
-    # 9) Main wait loop
-    # ------------------------------------------------------------------
+    # حلقه انتظار اصلی
     try:
         while not _shutdown_event.is_set():
             time.sleep(0.5)
     except Exception:
         app_logger.exception("Fatal error in main loop")
     finally:
-        # ------------------------------------------------------------------
-        # 10) Controlled shutdown
-        # ------------------------------------------------------------------
+        # shutdown کنترل‌شده
         app_logger.info("Shutting down...")
 
-        # ابتدا runtime فرمان را متوقف می‌کنیم.
+        # ابتدا worker/listener
         try:
             if worker is not None:
                 worker.stop()
@@ -469,7 +487,7 @@ def main() -> None:
         except Exception:
             app_logger.exception("Failed to stop command runtime")
 
-        # سپس ClientAuth / heartbeat
+        # سپس ClientAuth
         try:
             if ca:
                 ca.stop()
@@ -479,11 +497,7 @@ def main() -> None:
         app_logger.info("Bye.")
 
 
-# ======================================================================
-# Direct execution compatibility
-# ======================================================================
-# سازگاری با اجرای مستقیم فایل
-
+# اجرای مستقیم فایل
 if __name__ == "__main__":
-    # اگر فایل مستقیم اجرا شود، main اجرا می‌شود.
+    # entry point
     main()
