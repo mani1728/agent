@@ -18,6 +18,12 @@ from agent.infrastructure.config_manager import cfg
 
 logger = logging.getLogger(__name__)
 
+@dataclass(frozen=True)
+class KafkaCommitRef:
+    topic: str
+    partition: int
+    offset: int
+
 
 @dataclass
 class _PendingKafkaMessage:
@@ -631,6 +637,35 @@ class KafkaListener:
         logger.debug("Kafka record committed for command_id=%s", command_id)
         return True
 
+    def get_commit_ref(self, command_id: str) -> Optional[KafkaCommitRef]:
+        """
+        Return immutable commit reference for a pending command.
+        Useful for transport-level tracking/diagnostics.
+        """
+        with self._pending_lock:
+            pending = self._pending_by_command_id.get(command_id)
+            if pending is None:
+                return None
+
+            msg = pending.message
+            try:
+                topic = msg.topic()
+                partition = int(msg.partition())
+                offset = int(msg.offset())
+            except Exception:
+                logger.debug(
+                    "Failed to build commit ref for command_id=%s",
+                    command_id,
+                    exc_info=True,
+                )
+                return None
+
+            return KafkaCommitRef(
+                topic=str(topic),
+                partition=partition,
+                offset=offset,
+            )
+
     def related_command_ids(self, command_id: str) -> set[str]:
         """Return the command ids produced from the same pending record."""
         with self._pending_lock:
@@ -767,5 +802,6 @@ class KafkaListener:
             self.close()
 
 
-__all__ = ["KafkaListener"]
+__all__ = ["KafkaListener", "KafkaCommitRef"]
+
 
