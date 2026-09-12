@@ -35,3 +35,4 @@ Version 1_0_0/agent/docs/
 # فایل‌های موقت
 *.bak
 *.saved.bak
+*backup*
