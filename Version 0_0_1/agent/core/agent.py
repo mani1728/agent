@@ -1,5 +1,5 @@
-from agent.adapters.mt5_adapter import MT5Adapter
-from agent.contracts.models import Status
+from adapters.mt5_adapter import MT5Adapter
+from contracts.models import Status
 
 
 class Agent:
