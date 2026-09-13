@@ -1,4 +1,4 @@
-from core.agent import Agent
+from agent.core.agent import Agent
 
 
 def run() -> int:
