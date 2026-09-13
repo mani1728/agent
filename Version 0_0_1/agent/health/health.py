@@ -1,5 +1,5 @@
-from contracts.models import Status
-from core.agent import Agent
+from agent.contracts.models import Status
+from agent.core.agent import Agent
 
 
 def check(agent: Agent) -> Status:
