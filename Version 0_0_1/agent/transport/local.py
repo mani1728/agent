@@ -1,4 +1,4 @@
-from contracts.models import Status
+from agent.contracts.models import Status
 
 
 class LocalTransport:
