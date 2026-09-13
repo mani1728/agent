@@ -15,6 +15,9 @@ on:
 permissions:
   contents: write
 
+env:
+  PYTHONPATH: ${{ github.workspace }}\Version 0_0_1
+
 jobs:
   test:
     runs-on: windows-latest
