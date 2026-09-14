@@ -1,10 +1,12 @@
 import logging
 
+import pytest
+
 from agent.application.boundary import ApplicationBoundary
 from agent.application.app import build_dispatcher
 from agent.contracts.commands import make_command
 from agent.contracts.models import AgentConfig
-from agent.contracts.observability import ExecutionEventType
+from agent.contracts.observability import ExecutionEvent, ExecutionEventType
 from agent.contracts.security import AuthenticationResult, AuthorizationDecision, SecurityContext
 from agent.contracts.transport import ExecutionContext, TransportRequest
 from agent.core.agent import Agent
@@ -42,6 +44,8 @@ class FakeAuthorizer:
         self.decision = decision
 
     def authorize(self, context, command):
+        self.decision_context = context
+        self.decision_command = command
         return self.decision
 
 
@@ -71,16 +75,32 @@ def test_security_context_is_immutable_and_normalized():
     context = authenticated().context
     assert context.permissions == frozenset({"agent.read"})
     assert context.metadata == {}
-    try:
+    with pytest.raises(AttributeError):
         context.permissions = frozenset()
-        raise AssertionError("SecurityContext must be immutable")
-    except AttributeError:
-        pass
+
+
+def test_execution_event_is_immutable_and_has_required_identity():
+    event = ExecutionEvent.now(
+        "event-1", ExecutionEventType.REQUEST_RECEIVED, "req-1", "corr-1", "cmd-1", "received"
+    )
+    assert event.event_id == "event-1"
+    assert event.request_id == "req-1"
+    assert event.correlation_id == "corr-1"
+    assert event.command_id == "cmd-1"
+    assert event.timestamp.endswith("+00:00")
+    with pytest.raises(AttributeError):
+        event.outcome = "changed"
 
 
 def test_authentication_failure_is_deterministic():
     result = AuthenticationResult(False, code="authentication_failed", message="invalid credential")
     response = application(FakeAuthenticator(result)).handle(request())
+    assert response.success is False
+    assert response.code == "authentication_failed"
+
+
+def test_authentication_failure_without_code_uses_boundary_default():
+    response = application(FakeAuthenticator(AuthenticationResult(False))).handle(request())
     assert response.success is False
     assert response.code == "authentication_failed"
 
