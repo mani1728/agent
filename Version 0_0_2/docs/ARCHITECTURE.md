@@ -2,48 +2,121 @@
 
 ## Objective
 
-v0.0.2 hardens the runtime foundation established by v0.0.1. The core owns lifecycle state and depends on the `MT5Port` protocol rather than the concrete terminal integration.
+v0.0.2 is the **Agent Runtime & Contract Foundation**. It hardens the lifecycle and dependency boundaries established by v0.0.1 while deliberately avoiding trading and external infrastructure.
 
-## Boundary
+## Dependency boundary
 
 ```text
-Application entry point
+Application Entry Point
         |
         v
-      Agent  ------------------> Lifecycle / Status / Health
+      Agent
         |
         v
-     MT5Port <---------------- MT5Adapter
+     MT5Port  <----------------  MT5Adapter
                                   |
                                   v
-                            MetaTrader 5
+                             MetaTrader 5
 ```
 
-The dependency direction is intentional: the core consumes a protocol; the adapter implements it.
+The core consumes the `MT5Port` protocol. It does not import the concrete `MetaTrader5` integration. The concrete adapter is composed at the application boundary in `agent/main.py`.
 
-## Lifecycle states
+This permits deterministic test doubles and future adapters without changing core lifecycle logic.
 
-`CREATED -> STARTING -> RUNNING -> STOPPING -> STOPPED`
+## Lifecycle state machine
 
-A failed connection moves the agent to `FAILED`. A failed disconnect also moves it to `FAILED`. A stopped or failed agent can be started again.
+```text
+CREATED
+   |
+   v
+STARTING ---- connect failure / exception ----> FAILED
+   |
+   v
+RUNNING
+   |
+   v
+STOPPING ---- disconnect failure / exception -> FAILED
+   |
+   v
+STOPPED
+```
 
-`start()` is idempotent while `RUNNING`; it does not reconnect the terminal. `stop()` is safe before a first start and after a failed start.
+Rules:
+
+- `start()` from `RUNNING` is idempotent and does not reconnect.
+- `start()` may restart from `STOPPED` or `FAILED`.
+- `start()` during `STARTING` or `STOPPING` reports `lifecycle_busy`.
+- `stop()` is safe before the first start and after a failed start.
+- A disconnect failure leaves the runtime in `FAILED` so the failure is observable.
 
 ## Contracts
 
-- `MT5Port`: `connect()`, `disconnect()`, and `is_connected()`.
-- `Status`: immutable operation result with `ok`, human-readable `message`, and machine-readable `code`.
-- `HealthStatus`: immutable health result carrying `ok`, lifecycle `state`, and message.
-- `AgentConfig`: typed configuration boundary for application identity/version.
+### `MT5Port`
+
+Required operations:
+
+- `connect() -> bool`
+- `disconnect() -> bool`
+- `is_connected() -> bool`
+
+The protocol is runtime-checkable and is the only terminal-facing contract consumed by the core.
+
+### `Status`
+
+Immutable operation result containing:
+
+- `ok`: success/failure boolean.
+- `message`: human-readable result.
+- `code`: machine-readable result code.
+
+### `HealthStatus`
+
+Immutable health result containing:
+
+- `ok`: health boolean.
+- `state`: current lifecycle state.
+- `message`: human-readable health information.
+
+### `AgentConfig`
+
+Immutable, strongly typed application identity/version boundary. It intentionally remains small in v0.0.2; configuration loading, validation frameworks, and hot reload are deferred.
 
 ## Error boundary
 
-The adapter and runtime probe catch integration exceptions and convert them to deterministic failure behavior. The core never imports terminal APIs directly for business behavior.
+Integration exceptions are contained at the runtime boundary:
 
-## Testing strategy
+- `connect()` exception → `connection_failed` and `FAILED` state.
+- `disconnect()` exception → `disconnect_failed` and `FAILED` state.
+- health probe exception → unhealthy health result while preserving lifecycle state.
 
-Unit tests inject a deterministic fake adapter. They cover success/failure, invalid runtime conditions, idempotent start, safe stop, health transitions, adapter exceptions, and restart after stop.
+Exceptions are logged through the injected standard-library logger; raw integration exceptions do not escape the public lifecycle/health contract.
+
+## Test strategy
+
+Tests use a deterministic fake implementation of `MT5Port`; a real MetaTrader 5 terminal is not required.
+
+Coverage includes:
+
+- Port runtime contract compatibility.
+- Contract immutability and configuration defaults.
+- Successful and failed startup.
+- Startup adapter exception.
+- Idempotent startup.
+- Safe and repeated stop.
+- Disconnect failure and exception.
+- Health before start, healthy runtime, disconnected terminal, and health-probe exception.
+- Restart after stop and after connection failure.
+
+## Packaging and CI boundary
+
+The version has an independent PyInstaller specification and Windows build script. The dedicated workflow validates the Python test suite, generates the icon, builds `MT5Agent-v0.0.2.exe`, verifies its existence, executes the unavailable-terminal smoke test, and uploads the executable as a CI artifact.
+
+The verified build artifact SHA-256 is:
+
+```text
+eb18b139572670ab98995d6ce34681c17ce9516011e65c000b0f9934fbc92ad0
+```
 
 ## Non-goals
 
-No trading, order execution, transport, persistence, security/authentication, service hosting, or AI integration is introduced in this version.
+No trading, order execution, position/account management, network transport, persistence, authentication/authorization, Windows Service hosting, strategy engine, retry/circuit-breaker infrastructure, or AI integration is introduced in v0.0.2.
