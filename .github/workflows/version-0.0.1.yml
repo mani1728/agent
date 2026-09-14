@@ -66,8 +66,13 @@ jobs:
       - name: Smoke test EXE
         shell: pwsh
         run: |
-          $output = & .\dist\Agent.exe 2>&1 | Out-String
-          $exitCode = $LASTEXITCODE
+          $stdoutFile = Join-Path $env:RUNNER_TEMP "agent-smoke.stdout.txt"
+          $stderrFile = Join-Path $env:RUNNER_TEMP "agent-smoke.stderr.txt"
+          $process = Start-Process -FilePath ".\dist\Agent.exe" -Wait -PassThru -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
+          $exitCode = $process.ExitCode
+          $output = ""
+          if (Test-Path $stdoutFile) { $output += Get-Content $stdoutFile -Raw }
+          if (Test-Path $stderrFile) { $output += Get-Content $stderrFile -Raw }
           Write-Host $output
           if ($exitCode -ne 1) {
             throw "Expected Agent.exe to exit with code 1 when MT5 terminal is unavailable; got $exitCode"
@@ -78,6 +83,7 @@ jobs:
           if ($output -notmatch "Unable to connect to MT5\.") {
             throw "Agent.exe did not reach the expected MT5 connection failure path."
           }
+          Write-Host "Agent.exe smoke test passed. Exit code: $exitCode"
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
