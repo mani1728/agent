@@ -35,7 +35,7 @@ class AuthenticationResult:
 
     success: bool
     context: SecurityContext | None = None
-    code: str = "ok"
+    code: str = ""
     message: str = ""
 
 
@@ -44,7 +44,7 @@ class AuthorizationDecision:
     """Deterministic authorization outcome."""
 
     allowed: bool
-    code: str = "ok"
+    code: str = ""
     message: str = ""
 
 
