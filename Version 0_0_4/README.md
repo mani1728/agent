@@ -2,16 +2,16 @@
 
 ## Release Status
 
-**v0.0.4 is the release candidate for the Agent Transport Boundary & Execution Context Foundation.**
+**v0.0.4 is released and closed as the Agent Transport Boundary & Execution Context Foundation.**
 
-- Development branch: `version-0.0.4`
+- Development branch: `version-0.0.4` (deleted after merge)
 - Pull Request: `#34`
-- Baseline: `v0.0.3` / `78d7f37e14d44c18ec62e3b242dc6a000af34681`
-- Implementation commit: `b645e9aa2eb8f652f7e5a22bd01072d000a14fbc`
+- Final merge commit: `1f1a88632fd023439b5451b19c5851ff4f275bd3`
+- Release tag: `v0.0.4`
 - Release artifact: `MT5Agent-v0.0.4.exe`
-- Verified SHA-256: `19ad9b5bead94d9a3a8a28dc4c9405335d0ad777fa0b40093c78b3fcdfabd52d`
+- Published SHA-256: `52a6e79823d1737cd6a6f2d8511db3038e3a7dafd71a418c45ae50b2fcfe908a`
 
-See [`docs/FINAL_AUDIT.md`](docs/FINAL_AUDIT.md) for the release gate and final verification record.
+See [`docs/FINAL_AUDIT.md`](docs/FINAL_AUDIT.md) for the final verification record.
 
 ## Overview
 
@@ -171,7 +171,9 @@ CI validates:
 6. SHA-256 generation.
 7. Artifact upload.
 
-The v0.0.4 workflow completed successfully for the release candidate.
+The finalized v0.0.4 workflow completed successfully.
+
+The published executable was independently tested on Windows and started successfully.
 
 ## Build Locally on Windows
 
@@ -192,32 +194,33 @@ The executable is expected to return exit code `1` when started without an avail
 
 ## Release Artifact Verification
 
-Expected release asset:
+Published release asset:
 
 ```text
 MT5Agent-v0.0.4.exe
 ```
 
-Expected SHA-256:
+Published SHA-256:
 
 ```text
-19ad9b5bead94d9a3a8a28dc4c9405335d0ad777fa0b40093c78b3fcdfabd52d
+52a6e79823d1737cd6a6f2d8511db3038e3a7dafd71a418c45ae50b2fcfe908a
 ```
 
-The checksum must be independently verified after downloading the release asset.
+This checksum was independently verified on the Windows test host and matches the GitHub Release asset digest.
 
 ## Version Isolation
 
 `Version 0_0_1`, `Version 0_0_2`, and `Version 0_0_3` are closed baselines. v0.0.4 is implemented under `Version 0_0_4` and does not modify previous version directories.
 
-## Release Gate
+## Release Closure
 
-The version is considered closed only after:
+The v0.0.4 release gates are satisfied:
 
 1. PR #34 is merged into `main`.
 2. Tag `v0.0.4` points to the finalized release commit.
 3. `MT5Agent-v0.0.4.exe` is attached to the GitHub release.
-4. The published asset checksum matches the verified SHA-256.
-5. The executable is manually tested on Windows.
+4. The published asset checksum has been independently verified.
+5. The executable has been manually tested on Windows.
+6. The `version-0.0.4` development branch has been deleted.
 
-After closure, no additional feature work should be added to `version-0.0.4`; v0.0.5 must branch from the finalized `main` baseline.
+v0.0.4 is closed. No further feature work should be added to this version. v0.0.5 must branch from the finalized `main` baseline.
