@@ -61,8 +61,8 @@ jobs:
       - name: Smoke test unavailable-terminal path
         shell: pwsh
         run: |
-          & "dist\MT5Agent-v0.0.2.exe"
-          $code = $LASTEXITCODE
+          $process = Start-Process -FilePath "dist\MT5Agent-v0.0.2.exe" -Wait -PassThru -NoNewWindow
+          $code = $process.ExitCode
           if ($code -ne 1) { throw "Expected exit code 1 when terminal is unavailable, got $code" }
 
       - name: Upload executable
