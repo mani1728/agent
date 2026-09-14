@@ -1,6 +1,6 @@
 # Changelog — v0.0.2
 
-## v0.0.2 — Release Candidate
+## v0.0.2 — Agent Runtime & Contract Foundation
 
 ### Added
 
@@ -25,12 +25,14 @@
 
 ### Verification
 
-- GitHub Actions workflow run `34872771908` passed the v0.0.2 test job.
-- GitHub Actions workflow run `34872771908` passed the v0.0.2 Windows build job.
+- Final v0.0.2 Windows workflow run `34875680757` passed the test job.
+- Final v0.0.2 Windows workflow run `34875680757` passed the build job.
 - Packaging smoke test for the unavailable-terminal path passed with the expected exit code `1`.
 - Verified artifact: `MT5Agent-v0.0.2.exe`.
-- Artifact SHA-256: `eb18b139572670ab98995d6ce34681c17ce9516011e65c000b0f9934fbc92ad0`.
+- Extracted executable SHA-256: `5ceae12da14f349cb2a3a4bd04606fdb2ca6b595e89183bb59d7a5de00dfe13f`.
+- CI artifact archive digest: `sha256:359b6ae4e64d1905b5e6dc9d49fbc5efe8338106c56524879adb21852c57d893`.
+- PR `#32` was merged into `main` with merge commit `0ee540ef4af08a4bdcbb90b0262997b53d34662c`.
 
 ### Release status
 
-The branch is ready for final review and PR merge. The GitHub Release/tag publication step is intentionally not performed from this branch workflow; publish `v0.0.2` only after merge approval.
+Implementation, testing, packaging, CI verification, architecture documentation, and release documentation are complete. The remaining release operation is to create tag `v0.0.2` on the approved final release commit and publish the GitHub Release with the executable attached.
