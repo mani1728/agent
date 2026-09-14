@@ -19,11 +19,13 @@ class MT5Adapter:
             self._logger.error("MT5 initialization returned false")
         return connected
 
-    def disconnect(self) -> None:
+    def disconnect(self) -> bool:
         try:
             mt5.shutdown()
+            return True
         except Exception:
             self._logger.exception("MT5 shutdown failed")
+            return False
 
     def is_connected(self) -> bool:
         try:
