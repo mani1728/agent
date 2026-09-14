@@ -1,18 +1,17 @@
 # ==========================================
-# Whitelist: فقط Version 1_0_0 و محتوای آن
+# Whitelist: Version 1_0_0 and Version 0_0_1
 # ==========================================
 /*
 !.gitignore
 !Version 1_0_0/
 !Version 1_0_0/**
-!Version 0_0_1
+!Version 0_0_1/
 !Version 0_0_1/**
+!.github/
+!.github/workflows/
+!.github/workflows/**
 
-# ==========================================
-# Blacklist: چیزهایی که حتی داخل Version 1_0_0 هم نمی‌خوایم
-# ==========================================
-
-# فایل‌های پایتون
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -22,19 +21,26 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# لاگ‌ها
+# Build outputs
+build/
+dist/
+*.spec.bak
+Version 0_0_1/build/
+Version 0_0_1/dist/
+
+# Logs
 *.log
 Version 1_0_0/agent/logs/
 
-# تنظیمات ادیتور و آبسیدین
+# IDE/editor
 .obsidian/
 .idea/
 .vscode/
 
-# فولدر docs (کل محتوا)
+# Documentation excluded from v1
 Version 1_0_0/agent/docs/
 
-# فایل‌های موقت
+# Temporary files
 *.bak
 *.saved.bak
 *backup*

@@ -1,0 +1,112 @@
+name: Agent v0.0.1
+
+on:
+  push:
+    branches:
+      - version-0.0.1
+    tags:
+      - "v0.0.1*"
+  pull_request:
+    branches:
+      - main
+      - version-0.0.1
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHONPATH: ${{ github.workspace }}\Version 0_0_1
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: Version 0_0_1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r agent/requirements.txt
+
+      - name: Run tests
+        run: pytest
+
+  build:
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: Version 0_0_1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r agent/requirements.txt
+
+      - name: Generate application icon
+        run: python make_icon.py
+
+      - name: Build EXE
+        run: pyinstaller agent/deployment/Agent.spec --clean --noconfirm
+
+      - name: Verify EXE name
+        shell: pwsh
+        run: |
+          if (-not (Test-Path ".\dist\MT5Agent-v0.0.1.exe")) {
+            throw "Expected MT5Agent-v0.0.1.exe was not produced."
+          }
+          if (Test-Path ".\dist\Agent.exe") {
+            throw "Unexpected legacy Agent.exe was produced."
+          }
+          Write-Host "EXE naming check passed."
+
+      - name: Smoke test EXE
+        shell: pwsh
+        run: |
+          $stdoutFile = Join-Path $env:RUNNER_TEMP "agent-smoke.stdout.txt"
+          $stderrFile = Join-Path $env:RUNNER_TEMP "agent-smoke.stderr.txt"
+          $process = Start-Process -FilePath ".\dist\MT5Agent-v0.0.1.exe" -Wait -PassThru -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
+          $exitCode = $process.ExitCode
+          $output = ""
+          if (Test-Path $stdoutFile) { $output += Get-Content $stdoutFile -Raw }
+          if (Test-Path $stderrFile) { $output += Get-Content $stderrFile -Raw }
+          Write-Host $output
+          if ($exitCode -ne 1) {
+            throw "Expected MT5Agent-v0.0.1.exe to exit with code 1 when MT5 terminal is unavailable; got $exitCode"
+          }
+          if ($output -match "ModuleNotFoundError|ImportError|multiarray|No module named") {
+            throw "MT5Agent-v0.0.1.exe has a bundled dependency/import failure."
+          }
+          if ($output -notmatch "Unable to connect to MT5\.") {
+            throw "MT5Agent-v0.0.1.exe did not reach the expected MT5 connection failure path."
+          }
+          Write-Host "MT5Agent-v0.0.1.exe smoke test passed. Exit code: $exitCode"
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MT5Agent-v0.0.1-windows
+          path: Version 0_0_1/dist/MT5Agent-v0.0.1.exe
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v0.0.1')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" "dist/MT5Agent-v0.0.1.exe" --title "Agent ${{ github.ref_name }}" --generate-notes
