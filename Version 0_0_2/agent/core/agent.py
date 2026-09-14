@@ -2,7 +2,6 @@ import logging
 
 from agent.contracts.models import AgentConfig, HealthStatus, LifecycleState, Status
 from agent.contracts.ports import MT5Port
-from agent.adapters.mt5_adapter import MT5Adapter
 
 
 class Agent:
@@ -10,13 +9,13 @@ class Agent:
 
     def __init__(
         self,
-        mt5_adapter: MT5Port | None = None,
+        mt5_adapter: MT5Port,
         config: AgentConfig | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.config = config or AgentConfig()
         self.logger = logger or logging.getLogger(__name__)
-        self.mt5: MT5Port = mt5_adapter or MT5Adapter(self.logger)
+        self.mt5 = mt5_adapter
         self._state = LifecycleState.CREATED
 
     @property
@@ -50,9 +49,12 @@ class Agent:
 
         self._state = LifecycleState.STOPPING
         try:
-            self.mt5.disconnect()
+            disconnected = bool(self.mt5.disconnect())
         except Exception:
             self.logger.exception("MT5 adapter disconnect failed")
+            disconnected = False
+
+        if not disconnected:
             self._state = LifecycleState.FAILED
             return Status(False, "Unable to stop the agent cleanly.", "disconnect_failed")
 
