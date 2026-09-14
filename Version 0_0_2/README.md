@@ -4,6 +4,15 @@
 
 Version 0.0.2 hardens the runtime foundation established by v0.0.1 without introducing trading, order execution, transport, persistence, security, service hosting, or AI integration.
 
+## Release status
+
+- Version: `0.0.2`
+- Merge commit: `0ee540ef4af08a4bdcbb90b0262997b53d34662c`
+- PR: `#32`
+- CI: Windows test and build jobs passed
+- Artifact: `MT5Agent-v0.0.2.exe`
+- Release tag: `v0.0.2` should point to the final approved release commit.
+
 ## Scope
 
 ### Included
@@ -143,7 +152,7 @@ Windows runner
     -> artifact upload
 ```
 
-The latest verified v0.0.2 workflow run completed successfully for both test and build jobs. The build artifact is named `MT5Agent-v0.0.2` and contains the executable.
+The final v0.0.2 workflow run completed successfully for both test and build jobs. The CI artifact was produced from commit `c7ac9d7c0925584962171d2ab95b558005b98439`; the merge commit preserves the same source tree.
 
 ## Release artifact
 
@@ -153,14 +162,20 @@ Artifact:
 MT5Agent-v0.0.2.exe
 ```
 
-CI artifact SHA-256:
+SHA-256 of the extracted CI executable:
 
 ```text
-eb18b139572670ab98995d6ce34681c17ce9516011e65c000b0f9934fbc92ad0
+5ceae12da14f349cb2a3a4bd04606fdb2ca6b595e89183bb59d7a5de00dfe13f
 ```
 
-This checksum identifies the executable produced by the verified GitHub Actions build used for the v0.0.2 release candidate.
+CI artifact archive digest:
+
+```text
+sha256:359b6ae4e64d1905b5e6dc9d49fbc5efe8338106c56524879adb21852c57d893
+```
 
 ## Release policy
 
-v0.0.1 remains untouched. The root `README.md` and `Version 1_0_0` remain outside this version's implementation scope. v0.0.2 is intended to be merged only after final branch review and release verification.
+v0.0.2 is complete at the implementation and verification level. The repository release operation consists of creating tag `v0.0.2` on the approved final release commit and publishing the GitHub Release with `MT5Agent-v0.0.2.exe` attached.
+
+v0.0.1 remains untouched. The root `README.md` and `Version 1_0_0` remain outside this version's implementation scope.
