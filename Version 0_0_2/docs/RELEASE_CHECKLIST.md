@@ -2,7 +2,7 @@
 
 ## Scope control
 
-- [x] Development branch is `version-0.0.2` from `main`.
+- [x] Development branch was `version-0.0.2` from `main`.
 - [x] v0.0.1 source files are unchanged.
 - [x] v0.0.1 tag remains unchanged.
 - [x] Root `README.md` is unchanged.
@@ -22,24 +22,35 @@
 ## Verification
 
 - [x] Deterministic fake adapter is used for unit tests; real MT5 is not required.
-- [x] Windows GitHub Actions test job passed on the verified build baseline.
-- [x] Windows packaging job produced `MT5Agent-v0.0.2.exe` on the verified build baseline.
+- [x] Final Windows GitHub Actions test job passed (`34875680757`).
+- [x] Final Windows packaging job produced `MT5Agent-v0.0.2.exe` (`34875680757`).
 - [x] Packaging smoke test passed for the unavailable-terminal path with exit code `1`.
-- [x] Final branch diff contains only the approved v0.0.2 files.
+- [x] Final branch diff contained only the approved v0.0.2 files.
 - [x] No changes were made to v0.0.1, the root README, or `Version 1_0_0`.
-- [ ] Final CI rerun after the final documentation/test commits passes.
-- [ ] Final PR review completed.
-- [ ] PR merged into `main`.
-- [ ] Tag `v0.0.2` created from the approved merge commit.
-- [ ] GitHub Release `v0.0.2` published with `MT5Agent-v0.0.2.exe`.
+- [x] PR `#32` merged into `main` as `0ee540ef4af08a4bdcbb90b0262997b53d34662c`.
+- [x] Final documentation record completed after merge.
+
+## Release operation
+
+- [ ] Create annotated tag `v0.0.2` on the final approved release commit.
+- [ ] Publish GitHub Release `v0.0.2` with `MT5Agent-v0.0.2.exe` attached.
+- [ ] Record the published artifact checksum in the GitHub Release.
 
 ## Release artifact
 
-Verified build artifact from the successful CI baseline:
+Verified CI executable:
 
 ```text
 MT5Agent-v0.0.2.exe
-SHA-256: eb18b139572670ab98995d6ce34681c17ce9516011e65c000b0f9934fbc92ad0
+SHA-256: 5ceae12da14f349cb2a3a4bd04606fdb2ca6b595e89183bb59d7a5de00dfe13f
 ```
 
-The final release artifact must be generated from the final approved commit and its checksum recorded in the release notes.
+CI artifact archive:
+
+```text
+sha256:359b6ae4e64d1905b5e6dc9d49fbc5efe8338106c56524879adb21852c57d893
+```
+
+## Handoff to v0.0.3
+
+Once the release tag and GitHub Release are published, v0.0.2 is considered closed. New development must start from the resulting `main` state on a dedicated `version-0.0.3` branch.
