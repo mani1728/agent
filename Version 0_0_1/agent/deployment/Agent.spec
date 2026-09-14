@@ -4,6 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 
 
 project_root = Path(SPECPATH).parent.parent
+icon_path = project_root / "agent" / "deployment" / "MT5Agent.ico"
 
 numpy_datas, numpy_binaries, numpy_hiddenimports = collect_all("numpy")
 mt5_datas, mt5_binaries, mt5_hiddenimports = collect_all("MetaTrader5")
@@ -33,7 +34,8 @@ exe = EXE(
     analysis.binaries,
     analysis.datas,
     [],
-    name="Agent",
+    name="MT5Agent-v0.0.1",
+    icon=str(icon_path),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
