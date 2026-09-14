@@ -30,7 +30,7 @@ class HealthStatus:
 @dataclass(frozen=True)
 class AgentConfig:
     app_name: str = "Trading Agent"
-    version: str = "0.0.4"
+    version: str = "0.0.5"
 
 
 @dataclass(frozen=True)
