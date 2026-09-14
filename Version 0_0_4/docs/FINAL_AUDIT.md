@@ -1,13 +1,13 @@
 # v0.0.4 Final Audit
 
-## Release Candidate
+## Release Status
 
 - Version: `0.0.4`
-- Branch: `version-0.0.4`
-- Baseline: `v0.0.3` / `78d7f37e14d44c18ec62e3b242dc6a000af34681`
-- Implementation commit: `b645e9aa2eb8f652f7e5a22bd01072d000a14fbc`
+- Release tag: `v0.0.4`
+- Final merge commit: `1f1a88632fd023439b5451b19c5851ff4f275bd3`
 - Pull Request: `#34`
 - Target branch: `main`
+- Development branch: deleted after merge
 
 ## Scope Verification
 
@@ -39,7 +39,9 @@ Excluded:
 
 ## Verification
 
-The v0.0.4 GitHub Actions workflow completed successfully for the release candidate. The workflow verifies tests, Windows packaging, executable existence, unavailable-terminal startup behavior, and SHA-256 generation.
+The v0.0.4 GitHub Actions workflow completed successfully for the finalized release commit. The workflow verifies tests, Windows packaging, executable existence, unavailable-terminal startup behavior, and SHA-256 generation.
+
+The published Windows executable was independently downloaded and executed on a Windows test host. Startup completed successfully and produced the expected application startup log.
 
 Release artifact:
 
@@ -47,23 +49,28 @@ Release artifact:
 MT5Agent-v0.0.4.exe
 ```
 
-SHA-256:
+Published release asset SHA-256:
 
 ```text
-19ad9b5bead94d9a3a8a28dc4c9405335d0ad777fa0b40093c78b3fcdfabd52d
+52a6e79823d1737cd6a6f2d8511db3038e3a7dafd71a418c45ae50b2fcfe908a
 ```
+
+The published GitHub Release asset digest and the independently computed Windows-host SHA-256 match exactly.
 
 ## Release Gate
 
-Before closing v0.0.4:
+All release gates are satisfied:
 
-1. PR #34 must be merged into `main`.
-2. Tag `v0.0.4` must point to the merged release commit.
-3. The Windows executable must be attached to the GitHub release.
-4. The published asset SHA-256 must match the verified checksum above.
-5. The release must be manually tested on a Windows host with the required MT5 environment.
-6. `version-0.0.4` must not receive further feature work after release closure.
+1. PR #34 is merged into `main`.
+2. Tag `v0.0.4` points to the finalized merge commit.
+3. The Windows executable is attached to the GitHub release.
+4. The published asset SHA-256 has been independently verified.
+5. The executable has been manually tested on a Windows host.
+6. The `version-0.0.4` development branch has been deleted.
+7. No further feature work is planned for v0.0.4.
 
 ## Post-Release Baseline
 
-After release closure, v0.0.5 must start from the finalized `main` commit/tag and use a dedicated version branch. v0.0.4 remains a closed baseline.
+v0.0.4 is now a closed baseline. v0.0.5 must start from the finalized `main` baseline and use a dedicated version branch.
+
+Any future changes to v0.0.4 documentation are documentation-only and must not introduce feature changes into the closed version.
