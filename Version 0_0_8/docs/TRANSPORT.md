@@ -1,25 +1,19 @@
-# HTTP Transport — v0.0.7
+# Transport — v0.0.8
 
-Endpoint remains `POST /command`.
+The v0.0.6 HTTP request contract remains unchanged: `POST /command` translates HTTP/JSON into `TransportRequest`, delegates to `ApplicationPort`, and maps `TransportResponse` back to deterministic HTTP responses.
 
-The request-body limit is supplied to `HTTPTransportAdapter` by the composition root from `HTTPTransportConfig.max_request_bytes`; default is 1 MiB. The adapter does not read environment variables itself.
-
-The adapter accepts UTF-8 JSON with `request_id`, `correlation_id`, and `command`. Existing transport validation, application handoff, identity propagation, error mapping, and serialization behavior remain unchanged.
+v0.0.8 separates request translation from server lifecycle ownership:
 
 ```text
-HTTP request
-  ↓
-JSON parse / transport validation
-  ↓
-TransportRequest
-  ↓
-ApplicationPort.handle()
-  ↓
-TransportResponse
-  ↓
-JSON serialization
-  ↓
-HTTP response
+HTTPServerHost [Infrastructure]
+        ↓ owns lifecycle of
+ThreadingHTTPServer
+        ↓ delegates request handling to
+HTTPTransportAdapter
+        ↓
+ApplicationPort
 ```
 
-`create_server()` still returns a standard-library `ThreadingHTTPServer`; caller owns server startup/shutdown. No Windows Service or background deployment lifecycle is introduced.
+`HTTPTransportAdapter` remains responsible for protocol translation, request-size enforcement, endpoint behavior, response serialization, and deterministic HTTP mapping. `HTTPServerHost` owns blocking `serve_forever()`, graceful `shutdown()`, and socket closure.
+
+No HTTP type is introduced into `HostingPort`, ApplicationHost, Core, or domain contracts. Security ordering and identity propagation remain unchanged.
