@@ -1,54 +1,46 @@
-# MT5 Agent — v0.0.6
+# MT5 Agent — v0.0.7
 
-## Concrete Transport Boundary Foundation
+## Agent Configuration & Composition Root Foundation
 
-v0.0.6 adds the first concrete HTTP/JSON transport adapter on top of the transport-neutral contracts and `ApplicationPort` established in v0.0.5.
+v0.0.7 formalizes deterministic startup configuration and the application composition root while preserving the v0.0.6 HTTP, security, observability, command, runtime, and MT5 boundaries.
 
 ### Architecture
 
 ```text
-External Client
-      ↓
-HTTP/JSON Adapter
-      ↓
-Transport Contract
-      ↓
-ApplicationPort
-      ↓
-Validation → Authentication → Authorization → Dispatch
-      ↓
-Agent Runtime
-      ↓
-MT5Port → MT5Adapter → MetaTrader 5
+Environment / Process Inputs
+          ↓
+Configuration Adapter
+          ↓
+Immutable AgentConfig
+          ↓
+Composition Root
+   ┌──────┼────────┐
+ MT5Port Security Observability
+   └──────┼────────┘
+          ↓
+ApplicationBoundary
+          ↓
+HTTPTransportAdapter
 ```
 
-HTTP and the Python standard-library HTTP server exist only in the adapter layer. Core/application contracts remain transport-neutral.
+Core does not read environment variables and does not depend on HTTP, configuration infrastructure, or `MetaTrader5`. Concrete dependencies are assembled only at the composition root.
 
-### Endpoint
+### Configuration
 
-`POST /command`
+Supported process environment inputs:
 
-JSON request envelope:
+- `MT5_AGENT_HTTP_HOST` — default `127.0.0.1`
+- `MT5_AGENT_HTTP_PORT` — default `8080`, valid range `1..65535`
+- `MT5_AGENT_HTTP_MAX_REQUEST_BYTES` — default `1048576`, must be positive
 
-```json
-{
-  "request_id": "req-1",
-  "correlation_id": "corr-1",
-  "command": {
-    "command_id": "cmd-1",
-    "command_type": "agent.get_status",
-    "schema_version": "1",
-    "correlation_id": "corr-1",
-    "timestamp": "2026-01-01T00:00:00+00:00",
-    "payload": {}
-  }
-}
-```
-
-The response preserves `request_id`, `correlation_id`, and `command_id`.
+Invalid startup configuration fails deterministically before request processing. Configuration failures are startup/infrastructure failures and are not exposed through HTTP request error responses.
 
 ### Scope
 
-Included: HTTP/JSON parsing and serialization, deterministic transport/application error mapping, security-order preservation, identity propagation, failure isolation, tests, Windows CI, and PyInstaller packaging.
+Included: immutable configuration contracts, configuration validation, environment configuration adapter, explicit composition root, configurable HTTP request-body limit, tests, Windows CI, PyInstaller packaging, executable verification, smoke tests, and release documentation.
 
-Excluded: trading, AI/LLM, Kafka, WebSocket, JWT/OAuth/OIDC, TLS/mTLS, external IAM, persistence, retries, circuit breakers, production deployment, and broker business logic.
+Excluded: trading, order execution, AI/LLM, persistence, secrets storage, JWT/OAuth/OIDC, TLS/mTLS, production IAM, remote configuration, YAML/TOML frameworks, telemetry backends, retry/circuit-breaker infrastructure, WebSocket/Kafka, and Windows Service deployment.
+
+### Release state
+
+Implementation is prepared on `version-0.0.7` for review. Merge, tag, release, release checksum verification, and version closure remain pending explicit approval.
