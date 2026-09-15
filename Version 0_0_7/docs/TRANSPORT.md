@@ -1,21 +1,15 @@
-# HTTP Transport
+# HTTP Transport — v0.0.7
 
-## Endpoint
+Endpoint remains `POST /command`.
 
-`POST /command`
+The request-body limit is supplied to `HTTPTransportAdapter` by the composition root from `HTTPTransportConfig.max_request_bytes`; default is 1 MiB. The adapter does not read environment variables itself.
 
-Maximum accepted request body: 1 MiB.
-
-The adapter accepts UTF-8 JSON with `request_id`, `correlation_id`, and `command`. The command contains `command_id`, `command_type`, `schema_version`, `timestamp`, and `payload`.
-
-## Lifecycle
+The adapter accepts UTF-8 JSON with `request_id`, `correlation_id`, and `command`. Existing transport validation, application handoff, identity propagation, error mapping, and serialization behavior remain unchanged.
 
 ```text
 HTTP request
   ↓
-JSON parse
-  ↓
-Transport validation
+JSON parse / transport validation
   ↓
 TransportRequest
   ↓
@@ -28,8 +22,4 @@ JSON serialization
 HTTP response
 ```
 
-The adapter does not dispatch commands directly and has no access to MT5 internals.
-
-## Lifecycle behavior
-
-`create_server()` returns a standard-library `ThreadingHTTPServer`. The caller owns server startup and shutdown. No background service or deployment lifecycle is introduced by this version.
+`create_server()` still returns a standard-library `ThreadingHTTPServer`; caller owns server startup/shutdown. No Windows Service or background deployment lifecycle is introduced.
