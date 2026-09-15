@@ -28,8 +28,11 @@ class HTTPTransportAdapter:
 
     PATH = "/command"
 
-    def __init__(self, application: ApplicationPort) -> None:
+    def __init__(self, application: ApplicationPort, max_request_bytes: int = 1024 * 1024) -> None:
+        if not isinstance(max_request_bytes, int) or isinstance(max_request_bytes, bool) or max_request_bytes <= 0:
+            raise ValueError("max_request_bytes must be a positive integer")
         self._application = application
+        self._max_request_bytes = max_request_bytes
 
     @staticmethod
     def _parse_object(body: bytes) -> dict[str, Any]:
@@ -115,7 +118,7 @@ class HTTPTransportAdapter:
                     length = int(self.headers.get("Content-Length", "-1"))
                 except ValueError:
                     length = -1
-                if length < 0 or length > 1024 * 1024:
+                if length < 0 or length > adapter._max_request_bytes:
                     self._write(400, {"code": "invalid_request", "message": "Invalid request body length."})
                     return
                 result = adapter.handle_json(self.rfile.read(length))
