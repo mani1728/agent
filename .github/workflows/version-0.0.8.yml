@@ -84,7 +84,14 @@ jobs:
           Write-Host "OS: $env:RUNNER_OS"
           Write-Host "Architecture: $env:RUNNER_ARCH"
           Write-Host "Workspace: $env:GITHUB_WORKSPACE"
-          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsArchitecture
+          try {
+            Get-CimInstance Win32_OperatingSystem |
+              Select-Object Caption, Version, OSArchitecture |
+              Format-Table -AutoSize
+          }
+          catch {
+            Write-Warning "OS inventory query failed: $($_.Exception.Message)"
+          }
 
       - name: Verify Git
         shell: pwsh
