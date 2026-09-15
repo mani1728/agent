@@ -4,6 +4,7 @@ from agent.adapters.http_transport import HTTPTransportAdapter
 from agent.adapters.mt5_adapter import MT5Adapter
 from agent.application.app import build_dispatcher
 from agent.application.boundary import ApplicationBoundary
+from agent.application.dispatcher import CommandDispatcher
 from agent.contracts.configuration import AgentConfig
 from agent.contracts.ports import AuthenticationPort, AuthorizationPort, MT5Port, ObservabilityPort
 from agent.core.agent import Agent
@@ -13,6 +14,7 @@ from agent.core.agent import Agent
 class AgentComposition:
     config: AgentConfig
     agent: Agent
+    dispatcher: CommandDispatcher
     application: ApplicationBoundary
     http_transport: HTTPTransportAdapter
 
@@ -29,4 +31,4 @@ def compose_agent(
     dispatcher = build_dispatcher(agent)
     application = ApplicationBoundary(dispatcher, authenticator, authorizer, observability)
     transport = HTTPTransportAdapter(application, max_request_bytes=config.http.max_request_bytes)
-    return AgentComposition(config, agent, application, transport)
+    return AgentComposition(config, agent, dispatcher, application, transport)
