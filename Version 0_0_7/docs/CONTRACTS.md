@@ -1,29 +1,25 @@
-# v0.0.6 Contracts
+# Contracts — v0.0.7
 
-## TransportRequest
+v0.0.7 preserves all v0.0.6 command, transport, security, observability, runtime, and MT5 contracts and adds startup configuration contracts.
 
-Immutable envelope containing `ExecutionContext` and a transport-neutral `Command`.
+## AgentConfig
 
-## ExecutionContext
+Immutable top-level startup configuration. It currently contains `HTTPTransportConfig` only; it is intentionally narrow and represents configuration actually consumed by this version.
 
-Immutable propagation context containing:
+## HTTPTransportConfig
 
-- `request_id`
-- `correlation_id`
-- metadata
+Immutable fields: `host`, `port`, and `max_request_bytes`. Validation requires a non-empty host, TCP port in `1..65535`, and positive request-body limit.
 
-## TransportResponse
+## ConfigurationProvider
 
-Immutable application egress containing:
+Protocol:
 
-- `request_id`
-- `correlation_id`
-- `command_id`
-- `success`
-- deterministic `code`
-- `message`
-- optional `data`
+```python
+def load(self) -> AgentConfig: ...
+```
 
-## HTTP representation
+The contract does not prescribe environment variables, files, registries, secrets managers, or remote configuration.
 
-The HTTP adapter maps one JSON object to `TransportRequest` and one `TransportResponse` to JSON. HTTP types do not cross the `ApplicationPort` boundary.
+## ConfigurationError
+
+Deterministic startup contract violation. It is not an HTTP/client error and must not leak through request processing.
