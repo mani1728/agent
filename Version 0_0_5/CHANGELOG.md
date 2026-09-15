@@ -14,6 +14,14 @@
 - Boundary, security, observability, and failure-path tests.
 - Windows CI and PyInstaller packaging.
 
+### Release
+
+- Merged into `main` at `8c686e58070f561382c8c2280a1c9ccf8ddcd8de`.
+- Tagged and published as `v0.0.5`.
+- Published asset: `MT5Agent-v0.0.5.exe`.
+- Published asset SHA-256: `876ca0d8c238598bb47208dee1c998bdb0aed1d95d003609617966ea9b58969d`.
+- Historical `version-0.0.5` branch retained for traceability.
+
 ### Deliberately excluded
 
 - Concrete network transport.
