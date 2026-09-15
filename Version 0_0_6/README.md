@@ -38,6 +38,7 @@ JSON request envelope:
     "command_id": "cmd-1",
     "command_type": "agent.get_status",
     "schema_version": "1",
+    "correlation_id": "corr-1",
     "timestamp": "2026-01-01T00:00:00+00:00",
     "payload": {}
   }
