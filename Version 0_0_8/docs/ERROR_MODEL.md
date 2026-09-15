@@ -1,11 +1,15 @@
-# Error Model — v0.0.7
+# Error Model — v0.0.8
 
-Request-time categories remain distinct: Transport, Validation, Authentication, Authorization, Application, and Infrastructure failures. Raw internal/framework exceptions must never be returned to an external client.
+The request-time error model remains unchanged: Transport, Validation, Authentication, Authorization, Application, and Infrastructure failures remain distinct and sanitized at their established boundaries.
 
-## Startup configuration failure
+v0.0.8 adds process-lifecycle outcomes outside the client request model:
 
-`ConfigurationError` is a startup/infrastructure failure. It occurs before the application accepts requests and therefore does not add a new external request error category.
+- invalid configuration → executable exit `2`;
+- Agent startup failure → `agent_start_failed`, executable exit `1`;
+- hosting/bind/serve failure → `hosting_failed`, executable exit `1`;
+- Agent cleanup failure after normal serving → `agent_stop_failed`, executable exit `1`;
+- normal graceful host termination → `stopped`, executable exit `0`.
 
-Invalid environment integer syntax, invalid host, out-of-range port, or non-positive request limit causes deterministic startup rejection. The executable uses exit code `2` for invalid startup configuration.
+Raw hosting exceptions are logged internally and are not converted into HTTP client responses.
 
-The existing HTTP mapping, security error mapping, application exception sanitization, response serialization protection, and observer failure isolation remain unchanged.
+Failure precedence is deterministic: when hosting fails and Agent cleanup also fails, the hosting failure remains primary and cleanup failure is logged. Cleanup is attempted whenever Agent startup succeeded.
