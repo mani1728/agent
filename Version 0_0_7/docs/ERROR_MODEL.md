@@ -1,18 +1,11 @@
-# v0.0.6 Error Model
+# Error Model — v0.0.7
 
-Transport and application errors remain distinct.
+Request-time categories remain distinct: Transport, Validation, Authentication, Authorization, Application, and Infrastructure failures. Raw internal/framework exceptions must never be returned to an external client.
 
-| Condition | Code | HTTP status |
-|---|---|---:|
-| malformed JSON / invalid envelope | `invalid_request` | 400 |
-| invalid command | `invalid_command` | 400 |
-| unsupported schema | `unsupported_schema` | 400 |
-| authentication failure | `authentication_failed` | 401 |
-| authorization denial | `authorization_denied` | 403 |
-| unknown command | `unknown_command` | 404 |
-| authorization infrastructure failure | `authorization_failed` | 500 |
-| application execution failure | `execution_failed` | 500 |
-| unexpected application boundary exception | `application_error` | 500 |
-| response serialization failure | `transport_error` | 500 |
+## Startup configuration failure
 
-Raw framework exceptions and tracebacks are never returned to the HTTP client.
+`ConfigurationError` is a startup/infrastructure failure. It occurs before the application accepts requests and therefore does not add a new external request error category.
+
+Invalid environment integer syntax, invalid host, out-of-range port, or non-positive request limit causes deterministic startup rejection. The executable uses exit code `2` for invalid startup configuration.
+
+The existing HTTP mapping, security error mapping, application exception sanitization, response serialization protection, and observer failure isolation remain unchanged.
