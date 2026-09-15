@@ -1,8 +1,11 @@
 # Final Audit — v0.0.7
 
-## Release-readiness audit
+## Final release-readiness audit
 
-Baseline: `main@5217005509c91bb4f20647cda804aea018bb71a8`.
+Development baseline: `main@5217005509c91bb4f20647cda804aea018bb71a8`.
+
+Merged PR: `#39`.
+Merge commit: `a93812eee78692692982b831bc2a920ab6d104f6`.
 
 Scope is limited to **Agent Configuration & Composition Root Foundation**. Trading and all declared non-goals remain absent.
 
@@ -16,28 +19,29 @@ Scope is limited to **Agent Configuration & Composition Root Foundation**. Tradi
 - Observability remains injectable and best-effort.
 - Request/correlation/command identity contracts are unchanged.
 - Startup configuration failures remain outside the client request error model.
-- Historical version directories were not modified by v0.0.7 implementation.
 
 ### Verified CI / packaging evidence
 
-GitHub Actions workflow `Version 0.0.7`, run `34940840030`, attempt 2 completed successfully.
+Final pre-merge head `bc0b3aae0a95ab87ed5c7ac1bde13d4c3a03024f` passed the v0.0.7 Windows workflow completely: tests, build, executable verification, unavailable-terminal smoke test, invalid-configuration smoke test, checksum generation, and artifact upload.
 
-- test job: success
-- build job: success
-- executable verification: success
-- unavailable-terminal smoke test: success
-- invalid-configuration smoke test: success
-- artifact upload: success
-- artifact: `MT5Agent-v0.0.7.exe`
-- executable SHA-256: `cd62e24c5eb37b39ecb9c6579e060345fca21b525d4d0e9385e06d3069e0f1da`
-- GitHub Actions artifact digest: `sha256:388756f977e79cd3952a8505b4235a76e0794479214353cfdde0f57f7e97af39`
+Release handoff artifact:
 
-The executable checksum was independently recomputed from the downloaded CI artifact and matches `sha256.txt`.
+- file: `MT5Agent-v0.0.7.exe`
+- executable SHA-256: `38c17331fd3426c18f1c5774cafcdb4186f6810f529b9e1e548c91cf2db275e0`
+- GitHub Actions artifact digest: `sha256:d26b0432548a0f44962a75ff8288926b107f0cb0dc27d31c8a0e72f48857e46e`
 
-### Release state
+The executable checksum was independently recomputed from the downloaded CI artifact and matches its generated `sha256.txt`.
 
-The implementation is approved and release-ready. Merge to `main` is authorized by the project owner. Tag and GitHub Release creation are intentionally delegated to the owner after merge.
+The application/code tree represented by the successful PR head was merged into `main` by PR #39. This post-merge documentation finalization does not alter application implementation.
 
-Current status: **RELEASE READY / MERGE AUTHORIZED**.
+### Repository state
 
-The version is not marked fully CLOSED until the owner-created tag/release and attached executable are verified.
+- PR #39: merged
+- open PRs after merge: none
+- `main` contains v0.0.7
+- tag `v0.0.7`: owner handoff
+- GitHub Release `v0.0.7`: owner handoff
+
+Current status: **RELEASE READY — OWNER TAG/RELEASE HANDOFF**.
+
+The version is considered implementation-complete and merge-complete. Final tag/release publication and release-asset verification remain the owner's release action.
