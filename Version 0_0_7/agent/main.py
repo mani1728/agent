@@ -1,19 +1,27 @@
 import logging
 
-from agent.adapters.mt5_adapter import MT5Adapter
-from agent.application.app import build_dispatcher
+from agent.composition import compose_agent
 from agent.contracts.commands import make_command
-from agent.core.agent import Agent
+from agent.contracts.configuration import ConfigurationError
+from agent.infrastructure.environment_config import EnvironmentConfigurationProvider
 
 
 def run() -> int:
     logging.basicConfig(level=logging.INFO)
-    agent = Agent(MT5Adapter())
-    dispatcher = build_dispatcher(agent)
+    try:
+        config = EnvironmentConfigurationProvider().load()
+        composition = compose_agent(config)
+    except ConfigurationError as exc:
+        logging.getLogger(__name__).error("Invalid startup configuration: %s", exc)
+        return 2
+
+    agent = composition.agent
     try:
         status = agent.start()
         if status.ok:
-            result = dispatcher.dispatch(make_command("startup-status", "agent.get_status", "startup-status"))
+            result = composition.application._dispatcher.dispatch(
+                make_command("startup-status", "agent.get_status", "startup-status")
+            )
             print(result.message)
         else:
             print(status.message)
