@@ -1,121 +1,84 @@
 # MT5 Agent — Version History
 
-This document records the finalized version baselines of the MT5 Agent. Finalized versions are immutable release references; future development starts from the finalized `main` branch.
+This document records finalized MT5 Agent baselines. Released version directories are historical references; future development starts from finalized `main`.
 
 ## v0.0.1 — Initial Foundation
-
-Initial Agent foundation with MetaTrader 5 integration, lifecycle, adapter boundary, tests without a live MT5 terminal, Windows packaging, CI, and release artifact.
+Initial MT5 integration, lifecycle, adapter boundary, tests without live MT5, Windows packaging, CI and release artifact.
 
 ## v0.0.2 — Agent Runtime & Contract Foundation
-
-Established the explicit runtime lifecycle, `MT5Port` protocol, dependency injection, immutable typed runtime contracts, structured errors, health contract, injectable logging boundary, regression tests, Windows CI/CD, and reproducible packaging.
-
-Trading, external transport, persistence, authentication, and AI remained outside scope.
+Explicit lifecycle state machine, `MT5Port`, dependency injection, immutable runtime contracts, structured errors, health contract, logging boundary, regression tests and reproducible Windows packaging.
 
 ## v0.0.3 — Agent Command Foundation
-
-Added immutable `Command` / `CommandResult`, command and correlation identity, schema versioning, validation, `CommandDispatcher`, deterministic result/error codes, and read-only status/health commands.
+Immutable `Command` / `CommandResult`, command/correlation identity, schema versioning, validation, `CommandDispatcher`, deterministic result codes and read-only status/health commands.
 
 ## v0.0.4 — Agent Transport Boundary & Execution Context Foundation
-
-Established the transport/application boundary and execution context required for future external transports, while keeping transport technology outside Agent Core.
+Transport-neutral application boundary and execution context for future concrete transports.
 
 ## v0.0.5 — Security & Observability Boundary Foundation
-
-Established `SecurityContext`, authentication and authorization ports, mandatory authentication-before-authorization enforcement, deterministic security errors, `ExecutionEvent` contracts, `ObservabilityPort`, identity propagation, and best-effort observability.
+Security contracts and ports, mandatory Authentication-before-Authorization ordering, deterministic security failures, execution events, identity propagation and best-effort observability.
 
 ## v0.0.6 — Concrete HTTP Transport Boundary Foundation
+Standard-library HTTP/JSON `POST /command` adapter, deterministic transport/error mapping, identity propagation, failure isolation, Windows CI/CD and executable packaging.
 
-Released the first concrete transport implementation.
+## v0.0.7 — Agent Configuration & Composition Root Foundation
+
+Introduced a formal startup configuration and composition boundary while preserving Core independence.
 
 ### Added
 
-- Standard-library HTTP transport adapter
-- `POST /command` endpoint
-- JSON transport envelope
-- Request validation and deterministic invalid-request handling
-- `request_id`, `correlation_id`, and `command_id` propagation
-- Transport-neutral `ApplicationPort` integration
-- Validation → Authentication → Authorization → Dispatch ordering
-- Deterministic HTTP error mapping
-- Sanitized application/internal failures
-- Response serialization failure handling
-- Observer failure isolation
-- Transport-focused regression and integration tests
+- immutable `AgentConfig` / `HTTPConfig`
+- deterministic `ConfigurationError`
+- `ConfigurationProvider` protocol
+- environment-backed configuration adapter
+- explicit composition root
+- configurable HTTP host, port and request-body limit
+- deterministic invalid-startup behavior
+- configuration/composition architecture tests
+- regression coverage for HTTP, security ordering and boundary isolation
 - Windows CI/CD and PyInstaller packaging
-- Executable verification and SHA-256 generation
+- executable and smoke-test verification
 
-### Explicitly Not Included
-
-- Trading or order execution
-- Positions or account management
-- Strategy engine
-- AI/LLM integration
-- Durable persistence
-- Retry engine or circuit breaker
-- Kafka/WebSocket production transport
-- OAuth/OIDC/JWT or external IAM
-- TLS/mTLS production security infrastructure
-- Windows Service or production deployment infrastructure
-
-### Release Artifact
+### Architecture
 
 ```text
-MT5Agent-v0.0.6.exe
+Environment / Process Inputs
+          ↓
+Configuration Adapter
+          ↓
+Immutable AgentConfig
+          ↓
+Composition Root
+   ┌──────┼────────┐
+   ↓      ↓        ↓
+MT5Port Security Observability
+   \       |       /
+    ApplicationBoundary
+            ↓
+    HTTPTransportAdapter
 ```
 
-EXE SHA-256:
+Core does not read environment variables and remains independent of HTTP implementation, security infrastructure, observability backends, external configuration frameworks and the `MetaTrader5` package.
+
+Security ordering remains:
 
 ```text
-c85032d01ddd9972de34aa95333c75e87617493b98083cfafc17d4683e090e6b
+Validation → Authentication → Authorization → Dispatch
 ```
 
-GitHub Actions artifact digest:
+### Release state
 
-```text
-dea620d995d8c02f96d03468f7075f8c227340e64c52b14d10a51430b32fbfe2
-```
-
-### Release State
-
-- Tag: `v0.0.6`
-- Release: published by the project owner
-- PR: `#37`
+- PR: `#39`
 - PR status: merged
-- Merge commit: `7f961052fcd89cc46a9398285c8230849782417c`
-- Finalized development branch: `version-0.0.6`
-- Future versions must branch from finalized `main`, not from a historical version branch.
+- merge commit: `a93812eee78692692982b831bc2a920ab6d104f6`
+- release artifact: `MT5Agent-v0.0.7.exe`
+- verified executable SHA-256: `38c17331fd3426c18f1c5774cafcdb4186f6810f529b9e1e548c91cf2db275e0`
+- GitHub Actions artifact digest: `sha256:d26b0432548a0f44962a75ff8288926b107f0cb0dc27d31c8a0e72f48857e46e`
+- tag/release publication: owner handoff
 
-## Current Baseline
+### Explicitly not included
 
-The current development baseline after `v0.0.6` is the finalized `main` branch at the v0.0.6 merge commit.
+Trading/orders/positions, strategy engine, AI/LLM, persistence, JWT/OAuth/OIDC, TLS/mTLS, external IAM, secrets management, remote configuration, YAML/TOML frameworks, telemetry backend, Kafka/WebSocket, retry/circuit breaker and Windows Service.
 
-```text
-External System
-      ↓
-Concrete HTTP Transport
-      ↓
-Transport Contract
-      ↓
-ApplicationPort
-      ↓
-Security Boundary
-      ↓
-Application Boundary
-      ↓
-Command Dispatcher
-      ↓
-Agent Runtime
-      ↓
-MT5Port
-      ↓
-MT5Adapter
-      ↓
-MetaTrader 5
-```
+## Current baseline
 
-The concrete HTTP transport is an adapter, not a dependency of the Agent Core. Future transport implementations must preserve this dependency direction.
-
-## Development Rule
-
-A new version starts only from the finalized `main` baseline after the previous version has completed implementation, tests, CI/CD, packaging, documentation, final audit, PR, merge, tag, release, and artifact verification.
+`main` contains the completed v0.0.7 implementation and release documentation. New development must branch from the latest finalized `main` after the owner completes tag/release publication and release-asset verification.
