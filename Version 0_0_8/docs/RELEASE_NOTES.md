@@ -1,43 +1,33 @@
-# Release Notes — v0.0.7
+# Release Notes — v0.0.8
 
-## Agent Configuration & Composition Root Foundation
+## Agent Hosting & Graceful Shutdown Foundation
 
-v0.0.7 formalizes startup configuration and concrete dependency assembly without introducing infrastructure coupling into Agent Core.
+v0.0.8 closes the gap between the existing HTTP transport/composition foundation and a long-running application process.
 
-### Highlights
+### Added
 
-- Immutable typed `AgentConfig` / `HTTPConfig` startup contracts
-- Deterministic `ConfigurationError`
-- Replaceable `ConfigurationProvider` protocol
-- Environment-backed configuration adapter
-- Explicit composition root for MT5, application, security, observability, and HTTP wiring
-- Configuration-driven HTTP host, port, and maximum request-body size
-- Deterministic startup failure for malformed configuration
-- Regression coverage for architecture boundaries and existing HTTP behavior
-- Windows CI/CD, PyInstaller executable verification, smoke tests, and SHA-256 generation
+- transport-neutral `AgentLifecyclePort` and `HostingPort` protocols;
+- `ApplicationHost` coordinator for deterministic Agent start/serve/stop ordering;
+- `HTTPServerHost` infrastructure adapter for standard-library server lifecycle ownership;
+- graceful SIGINT/SIGTERM translation isolated in infrastructure;
+- deferred HTTP bind so bind/serve failures are handled as hosting lifecycle failures;
+- lifecycle, HTTP hosting integration, and architecture-isolation tests;
+- v0.0.8 Windows CI/CD and executable packaging.
 
-### Compatibility and boundaries
+### Preserved
 
-Validation → Authentication → Authorization → Dispatch ordering is unchanged. Observability remains best-effort and injectable. Request, correlation, and command identity propagation remains unchanged. Core does not read environment variables and does not depend on HTTP, security infrastructure, observability backends, or the `MetaTrader5` Python package.
+- `POST /command` behavior and transport contracts;
+- Validation → Authentication → Authorization → Dispatch;
+- request/correlation/command identity propagation;
+- best-effort request observability;
+- Core independence from HTTP, OS/process APIs, and concrete MetaTrader5 infrastructure.
 
-### Non-goals
+### Repository maintenance
 
-No trading/order execution, position management, strategy engine, AI/LLM integration, persistence, JWT/OAuth/OIDC, TLS/mTLS, external IAM, secrets manager, remote configuration, YAML/TOML framework, Kafka/WebSocket transport, retry/circuit breaker, telemetry backend, or Windows Service is introduced.
+The root `.gitignore` now defaults to tracking source/version directories and denies generated/local artifacts instead of historically whitelisting only early version directories. v0.0.7 documentation is reconciled with its already-published tag/release state; no v0.0.7 tag, asset, or history is modified.
 
-### Merge state
+### Explicit non-goals
 
-PR `#39` was merged into `main` at `a93812eee78692692982b831bc2a920ab6d104f6`.
+Trading, Orders/Positions, Persistence, Idempotency, Retry, Circuit Breaker, TLS/mTLS, JWT/OAuth/OIDC, Secrets Management, Kafka, WebSocket, Windows Service, AI/LLM, and Strategy Engine.
 
-### Release artifact
-
-`MT5Agent-v0.0.7.exe`
-
-SHA-256:
-
-`38c17331fd3426c18f1c5774cafcdb4186f6810f529b9e1e548c91cf2db275e0`
-
-GitHub Actions artifact digest:
-
-`sha256:d26b0432548a0f44962a75ff8288926b107f0cb0dc27d31c8a0e72f48857e46e`
-
-Tests, packaging, executable verification and both smoke-test paths passed. The owner can now create tag `v0.0.7`, publish the GitHub Release, and attach the verified executable.
+No v0.0.8 tag or GitHub Release is created as part of the pre-merge development phase.
