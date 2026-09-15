@@ -1,19 +1,13 @@
-# MT5 Agent v0.0.6
+# Release Notes — v0.0.7
 
-## Concrete Transport Boundary Foundation
+## Agent Configuration & Composition Root Foundation
 
-v0.0.6 introduces the first concrete HTTP/JSON transport adapter while preserving the transport-neutral application boundary from v0.0.5.
+v0.0.7 formalizes startup configuration and dependency assembly. It adds immutable configuration contracts, a replaceable configuration-provider protocol, an environment adapter, and a single composition root that wires MT5, security, observability, application, and HTTP components.
 
-### Included
+The HTTP request-body limit is now configuration-driven while HTTP details remain outside Core. Invalid startup configuration fails deterministically before request handling.
 
-- `POST /command` HTTP/JSON adapter
-- transport request parsing and validation
-- request/correlation/command identity propagation
-- deterministic application-to-HTTP error mapping
-- security ordering preservation
-- observer failure isolation
-- Windows CI and PyInstaller packaging
+No trading, order execution, persistence, AI/LLM, production IAM, secrets management, TLS/mTLS, remote configuration, or new transport technology is introduced.
 
-### Not included
+Planned artifact: `MT5Agent-v0.0.7.exe`.
 
-Trading, order execution, AI/LLM, Kafka, WebSocket, JWT/OAuth/OIDC, TLS/mTLS, external IAM, persistence, retries, circuit breakers, Windows Service, and production deployment infrastructure.
+Status: **pre-merge review**. CI result, final artifact SHA-256, merge commit, tag, release, and artifact verification must be recorded only after those events actually occur.
