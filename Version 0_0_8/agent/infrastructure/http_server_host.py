@@ -2,28 +2,40 @@
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable
 from http.server import ThreadingHTTPServer
 
 
 class HTTPServerHost:
     """Own the concrete HTTP server lifecycle behind HostingPort semantics."""
 
-    def __init__(self, server: ThreadingHTTPServer) -> None:
-        self._server = server
-        self._closed = False
+    def __init__(self, server_factory: Callable[[], ThreadingHTTPServer]) -> None:
+        self._server_factory = server_factory
+        self._server: ThreadingHTTPServer | None = None
+        self._lock = threading.Lock()
+        self._shutdown_requested = False
 
     def serve(self) -> None:
-        """Block while serving and always release the listening socket on exit."""
+        """Create, bind, and serve until shutdown, then release the socket."""
+        server = self._server_factory()
+        with self._lock:
+            self._server = server
+            shutdown_requested = self._shutdown_requested
+        if shutdown_requested:
+            server.server_close()
+            return
         try:
-            self._server.serve_forever()
+            server.serve_forever()
         finally:
-            self._close()
+            server.server_close()
+            with self._lock:
+                self._server = None
 
     def shutdown(self) -> None:
-        """Request graceful termination of serve_forever."""
-        self._server.shutdown()
-
-    def _close(self) -> None:
-        if not self._closed:
-            self._server.server_close()
-            self._closed = True
+        """Request graceful termination of the active or next serving loop."""
+        with self._lock:
+            self._shutdown_requested = True
+            server = self._server
+        if server is not None:
+            server.shutdown()
