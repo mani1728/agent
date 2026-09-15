@@ -1,31 +1,19 @@
-# v0.0.6 Test Strategy
+# Test Strategy — v0.0.7
 
-Tests are local and deterministic; no external HTTP service or MT5 terminal is required.
+The v0.0.7 suite retains v0.0.6 HTTP regression tests and adds configuration/composition coverage.
 
-## Contract tests
+Required coverage:
 
-- JSON parsing
-- required identity validation
-- correlation propagation
-- command construction
-- response serialization
-- serialization failure mapping
+- immutable/default configuration behavior
+- invalid host/port/request-limit rejection
+- environment-to-contract translation
+- deterministic malformed environment failure
+- dependency injection through the composition root
+- configurable HTTP request-body limit
+- Core isolation from environment variables, HTTP adapter code, and `MetaTrader5`
+- regression of Validation → Authentication → Authorization → Dispatch ordering
+- identity propagation for request/correlation/command IDs
+- observer failure isolation
+- sanitized internal failures
 
-## Security tests
-
-- authentication precedes authorization
-- authorization precedes dispatch
-- authentication failure prevents authorization and dispatch
-- authorization denial prevents dispatch
-
-## Integration tests
-
-- valid HTTP request reaches `ApplicationPort`
-- application result maps to HTTP response
-- application exception is sanitized
-
-## Isolation tests
-
-- malformed transport requests do not call the application
-- observer failure does not fail valid execution
-- transport/application failures do not leak internal exception details
+CI runs `pytest` on Windows/Python 3.11, builds the PyInstaller executable, verifies the expected executable, smoke-tests the unavailable-MT5 path, smoke-tests invalid configuration, generates SHA-256, and uploads the executable/checksum artifact.
