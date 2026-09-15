@@ -9,17 +9,23 @@ from agent.infrastructure.http_server_host import HTTPServerHost
 
 
 class FakeAgent:
-    def __init__(self, start_ok=True, stop_ok=True, calls=None):
+    def __init__(self, start_ok=True, stop_ok=True, calls=None, start_error=None, stop_error=None):
         self.start_ok = start_ok
         self.stop_ok = stop_ok
         self.calls = calls if calls is not None else []
+        self.start_error = start_error
+        self.stop_error = stop_error
 
     def start(self):
         self.calls.append("agent.start")
+        if self.start_error:
+            raise self.start_error
         return Status(self.start_ok, "start", "start")
 
     def stop(self):
         self.calls.append("agent.stop")
+        if self.stop_error:
+            raise self.stop_error
         return Status(self.stop_ok, "stop", "stop")
 
 
@@ -66,6 +72,18 @@ def test_start_failure_prevents_serving_and_cleanup():
     assert calls == ["agent.start"]
 
 
+def test_start_exception_is_contained_and_prevents_serving():
+    calls = []
+    result = ApplicationHost(
+        FakeAgent(calls=calls, start_error=RuntimeError("start exploded")),
+        FakeHosting(calls=calls),
+    ).run()
+    assert not result.ok
+    assert result.code == "agent_start_failed"
+    assert result.message == "Agent startup failed."
+    assert calls == ["agent.start"]
+
+
 def test_hosting_failure_still_stops_agent_and_remains_primary_failure():
     calls = []
     result = ApplicationHost(
@@ -77,10 +95,31 @@ def test_hosting_failure_still_stops_agent_and_remains_primary_failure():
     assert calls == ["agent.start", "hosting.serve", "agent.stop"]
 
 
+def test_hosting_failure_remains_primary_when_stop_raises():
+    calls = []
+    result = ApplicationHost(
+        FakeAgent(calls=calls, stop_error=RuntimeError("stop exploded")),
+        FakeHosting(calls=calls, error=OSError("bind failed")),
+    ).run()
+    assert not result.ok
+    assert result.code == "hosting_failed"
+    assert calls == ["agent.start", "hosting.serve", "agent.stop"]
+
+
 def test_stop_failure_is_reported_after_normal_serving():
     result = ApplicationHost(FakeAgent(stop_ok=False), FakeHosting()).run()
     assert not result.ok
     assert result.code == "agent_stop_failed"
+
+
+def test_stop_exception_is_contained_after_normal_serving():
+    result = ApplicationHost(
+        FakeAgent(stop_error=RuntimeError("stop exploded")),
+        FakeHosting(),
+    ).run()
+    assert not result.ok
+    assert result.code == "agent_stop_failed"
+    assert result.message == "Agent cleanup failed."
 
 
 def test_http_server_host_serves_and_shuts_down_cleanly():
