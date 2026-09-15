@@ -36,6 +36,8 @@ def compose_agent(
     dispatcher = build_dispatcher(agent)
     application = ApplicationBoundary(dispatcher, authenticator, authorizer, observability)
     transport = HTTPTransportAdapter(application, max_request_bytes=config.http.max_request_bytes)
-    concrete_hosting = hosting or HTTPServerHost(transport.create_server(config.http.host, config.http.port))
+    concrete_hosting = hosting or HTTPServerHost(
+        lambda: transport.create_server(config.http.host, config.http.port)
+    )
     host = ApplicationHost(agent, concrete_hosting)
     return AgentComposition(config, agent, dispatcher, application, transport, concrete_hosting, host)
