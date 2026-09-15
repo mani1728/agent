@@ -1,8 +1,4 @@
-"""Concrete HTTP/JSON transport adapter.
-
-This module is the only place where the standard-library HTTP server is used.
-The application receives only the transport-neutral ApplicationPort contract.
-"""
+"""Concrete HTTP/JSON transport adapter."""
 
 from __future__ import annotations
 
@@ -58,31 +54,21 @@ class HTTPTransportAdapter:
             raise TransportValidationError("correlation_id must be a non-empty string")
         if not isinstance(raw_command, dict):
             raise TransportValidationError("command must be a JSON object")
-        required = ("command_id", "command_type", "schema_version", "timestamp", "payload")
+        required = ("command_id", "command_type", "schema_version", "correlation_id", "timestamp", "payload")
         missing = [field for field in required if field not in raw_command]
         if missing:
             raise TransportValidationError("command is missing required fields")
-        command = make_command(
-            command_id=raw_command["command_id"],
-            command_type=raw_command["command_type"],
-            correlation_id=correlation_id,
-            schema_version=raw_command["schema_version"],
-            timestamp=raw_command["timestamp"],
-            payload=raw_command["payload"],
-        )
+        if raw_command["correlation_id"] != correlation_id:
+            raise TransportValidationError("context and command correlation_id must match")
+        command = make_command(raw_command["command_id"], raw_command["command_type"], correlation_id,
+                               raw_command["payload"], raw_command["timestamp"], raw_command["schema_version"])
         return TransportRequest(ExecutionContext(request_id, correlation_id, {}), command)
 
     @staticmethod
     def _response_body(response: TransportResponse) -> bytes:
-        value = {
-            "request_id": response.request_id,
-            "correlation_id": response.correlation_id,
-            "command_id": response.command_id,
-            "success": response.success,
-            "code": response.code,
-            "message": response.message,
-            "data": response.data,
-        }
+        value = {"request_id": response.request_id, "correlation_id": response.correlation_id,
+                 "command_id": response.command_id, "success": response.success, "code": response.code,
+                 "message": response.message, "data": response.data}
         try:
             return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         except (TypeError, ValueError) as exc:
@@ -92,37 +78,29 @@ class HTTPTransportAdapter:
     def _status_for(response: TransportResponse) -> int:
         if response.success:
             return 200
-        return {
-            "invalid_request": 400,
-            "invalid_command": 400,
-            "unsupported_schema": 400,
-            "authentication_failed": 401,
-            "authorization_denied": 403,
-            "authorization_failed": 500,
-            "unknown_command": 404,
-            "execution_failed": 500,
-        }.get(response.code, 500)
+        return {"invalid_request": 400, "invalid_command": 400, "unsupported_schema": 400,
+                "authentication_failed": 401, "authorization_denied": 403, "authorization_failed": 500,
+                "unknown_command": 404, "execution_failed": 500, "application_error": 500,
+                "transport_error": 500}.get(response.code, 500)
 
     def handle_json(self, body: bytes) -> HTTPResponse:
         try:
-            value = self._parse_object(body)
-            request = self._request_from_json(value)
+            request = self._request_from_json(self._parse_object(body))
         except (HTTPTransportError, TransportValidationError, CommandValidationError) as exc:
-            error = TransportResponse("", "", "", False, "invalid_request", str(exc))
-            return HTTPResponse(400, self._response_body(error))
+            return HTTPResponse(400, self._response_body(TransportResponse("", "", "", False, "invalid_request", str(exc))))
         try:
             response = self._application.handle(request)
         except Exception:
-            error = TransportResponse(request.context.request_id, request.context.correlation_id,
-                                      request.command.command_id, False, "application_error",
-                                      "Application request failed.")
-            return HTTPResponse(500, self._response_body(error))
+            response = TransportResponse(request.context.request_id, request.context.correlation_id,
+                                         request.command.command_id, False, "application_error",
+                                         "Application request failed.")
         try:
             body_bytes = self._response_body(response)
         except HTTPTransportError:
-            error = TransportResponse(response.request_id, response.correlation_id, response.command_id,
-                                      False, "transport_error", "Response serialization failed.")
-            return HTTPResponse(500, self._response_body(error))
+            body_bytes = self._response_body(TransportResponse(response.request_id, response.correlation_id,
+                                                               response.command_id, False, "transport_error",
+                                                               "Response serialization failed."))
+            return HTTPResponse(500, body_bytes)
         return HTTPResponse(self._status_for(response), body_bytes)
 
     def create_server(self, host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:
@@ -133,23 +111,18 @@ class HTTPTransportAdapter:
                 if self.path != adapter.PATH:
                     self._write(404, {"code": "not_found", "message": "Endpoint not found."})
                     return
-                length_header = self.headers.get("Content-Length")
                 try:
-                    length = int(length_header) if length_header is not None else -1
+                    length = int(self.headers.get("Content-Length", "-1"))
                 except ValueError:
                     length = -1
                 if length < 0 or length > 1024 * 1024:
                     self._write(400, {"code": "invalid_request", "message": "Invalid request body length."})
                     return
                 result = adapter.handle_json(self.rfile.read(length))
-                self.send_response(result.status)
-                self.send_header("Content-Type", result.content_type)
-                self.send_header("Content-Length", str(len(result.body)))
-                self.end_headers()
-                self.wfile.write(result.body)
+                self._write(result.status, json.loads(result.body))
 
             def _write(self, status: int, value: dict[str, Any]) -> None:
-                body = json.dumps(value, separators=(",", ":")).encode("utf-8")
+                body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
