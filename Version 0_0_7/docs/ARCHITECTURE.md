@@ -1,39 +1,29 @@
-# v0.0.6 Architecture
+# Architecture — v0.0.7
 
-## Dependency direction
+## Purpose
+
+v0.0.7 introduces a configuration and composition boundary without changing Core dependency direction.
 
 ```text
-External Client
+Process Environment
       ↓
-Concrete HTTP Adapter
+EnvironmentConfigurationProvider   [Infrastructure]
       ↓
-Transport Contract
+AgentConfig                         [Contract]
       ↓
-ApplicationPort
+compose_agent                       [Composition Root]
+  ├── MT5Port → MT5Adapter
+  ├── AuthenticationPort
+  ├── AuthorizationPort
+  └── ObservabilityPort
       ↓
 ApplicationBoundary
       ↓
-CommandDispatcher
-      ↓
-Agent Runtime
-      ↓
-MT5Port
-      ↓
-MT5Adapter
-      ↓
-MetaTrader 5
+HTTPTransportAdapter
 ```
 
-The HTTP adapter is infrastructure. No application/core module imports HTTP server classes, HTTP request objects, or framework-specific logic.
+The composition root is the only assembly point for concrete dependencies. Core remains unaware of environment variables, HTTP server details, security infrastructure, observability backends, packaging, and the `MetaTrader5` package.
 
-## Concrete transport
+Security order remains `Validation → Authentication → Authorization → Dispatch`. Observability remains injectable and best-effort. `request_id`, `correlation_id`, and `command_id` propagation is unchanged.
 
-The implementation uses Python's standard-library `http.server`. This keeps the first concrete adapter dependency-light while proving the replaceable boundary. `POST /command` is the only application endpoint in scope.
-
-## Security invariant
-
-`ApplicationBoundary` remains responsible for `validation → authentication → authorization → dispatch`. The HTTP adapter only constructs `TransportRequest` and calls `ApplicationPort`.
-
-## Observability invariant
-
-`request_id`, `correlation_id`, and `command_id` are propagated through the existing transport/application contracts. Observer failures remain non-fatal.
+Configuration parsing is an infrastructure concern. Invalid startup configuration fails before request acceptance and does not enter the request error model.
