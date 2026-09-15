@@ -28,10 +28,14 @@ class ApplicationHost:
     def run(self) -> Status:
         """Start the Agent, serve until termination, then stop the Agent.
 
-        A hosting failure is the primary failure when cleanup also fails.
-        Agent cleanup is attempted whenever Agent startup succeeded.
+        Startup, hosting, and shutdown exceptions are contained at this boundary.
+        A hosting failure remains primary when cleanup also fails.
         """
-        start_status = self._agent.start()
+        try:
+            start_status = self._agent.start()
+        except Exception:
+            self._logger.exception("Agent startup failed")
+            return Status(False, "Agent startup failed.", "agent_start_failed")
         if not start_status.ok:
             return Status(False, start_status.message, "agent_start_failed")
 
@@ -42,7 +46,11 @@ class ApplicationHost:
             self._logger.exception("Hosting failed")
             primary_failure = Status(False, "Application hosting failed.", "hosting_failed")
         finally:
-            stop_status = self._agent.stop()
+            try:
+                stop_status = self._agent.stop()
+            except Exception:
+                self._logger.exception("Agent cleanup failed")
+                stop_status = Status(False, "Agent cleanup failed.", "agent_stop_failed")
             if not stop_status.ok:
                 if primary_failure is not None:
                     self._logger.error("Agent cleanup failed after hosting failure: %s", stop_status.message)
