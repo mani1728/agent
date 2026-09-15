@@ -1,14 +1,16 @@
-# Changelog — v0.0.6
+# Changelog — v0.0.7
 
-## 0.0.6
+## 0.0.7
 
-- Added a concrete HTTP/JSON transport adapter.
-- Preserved the transport-neutral `ApplicationPort` boundary.
-- Added deterministic HTTP mapping for validation, authentication, authorization, application, and transport failures.
-- Preserved request/correlation/command identity propagation.
-- Added transport, security-ordering, application-integration, and failure-isolation tests.
-- Added Windows CI, PyInstaller packaging, executable verification, smoke testing, and SHA-256 generation.
+- Added immutable `AgentConfig` and `HTTPTransportConfig` startup contracts.
+- Added deterministic `ConfigurationError` validation.
+- Added `ConfigurationProvider` protocol.
+- Added environment-based configuration infrastructure adapter.
+- Added explicit application composition root for MT5, security, observability, application, and HTTP dependencies.
+- Made the HTTP request-body limit configurable without coupling Core to HTTP configuration.
+- Added configuration, composition, boundary, and regression tests.
+- Added Windows CI/CD, PyInstaller packaging for `MT5Agent-v0.0.7.exe`, executable verification, smoke tests, and SHA-256 generation.
 
 ## Deliberately excluded
 
-Trading, order execution, AI/LLM, Kafka, WebSocket, JWT/OAuth/OIDC, TLS/mTLS, external IAM, persistence, distributed idempotency, retry, circuit breaker, Windows Service, and production deployment infrastructure.
+Trading, orders, positions, AI/LLM, persistence, secrets management, JWT/OAuth/OIDC, TLS/mTLS, external IAM, remote configuration, YAML/TOML frameworks, telemetry backends, retries, circuit breakers, Kafka/WebSocket, Windows Service, and production deployment infrastructure.
