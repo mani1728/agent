@@ -1,25 +1,25 @@
-# v0.0.6 Final Audit
+# Final Audit — v0.0.7
 
-## Baseline
+## Pre-merge audit state
 
-- Source: finalized `main` `4f052425842132dffc22ab79be857255f23c2e27`.
-- Historical v0.0.5 branch remains unchanged and is not used for development.
-- Dedicated branch: `version-0.0.6`.
+Baseline: `main@5217005509c91bb4f20647cda804aea018bb71a8`.
 
-## Architecture
+Scope is limited to Agent Configuration & Composition Root Foundation. Trading and other declared non-goals are absent.
 
-- Concrete HTTP code is isolated to the adapter layer.
-- `ApplicationPort` remains the only application ingress used by transport.
-- No HTTP dependency was introduced into core contracts.
-- Security order remains validation → authentication → authorization → dispatch.
-- Existing observability propagation remains intact.
+Architecture review:
 
-## Scope
+- Core does not read environment variables.
+- Core remains independent of HTTP implementation and `MetaTrader5` package imports.
+- Configuration parsing resides in infrastructure.
+- Concrete dependency assembly resides in the composition root.
+- Security order remains Validation → Authentication → Authorization → Dispatch.
+- Observability remains injectable and best-effort.
+- Request/correlation/command identity contracts are unchanged.
+- Startup configuration failures do not enter the external request error model.
+- Historical version directories are not modified by v0.0.7 implementation.
 
-Included: HTTP/JSON adapter, contract mapping, deterministic error mapping, tests, CI, packaging, and documentation.
+## Pending evidence
 
-Excluded: all v0.0.6 non-goals including trading, AI/LLM, Kafka, JWT/OAuth/OIDC, TLS/mTLS, persistence, retry, circuit breaker, and production deployment.
+This document must not declare the version CLOSED before CI, packaging, executable verification, smoke tests, PR review, explicit merge approval, merge, tag, release, and release artifact checksum verification complete.
 
-## Verification
-
-This document is updated during final verification. Merge/release gates must remain unchecked until CI, packaging, smoke test, checksum, and final diff verification succeed.
+Current status: **PRE-MERGE / NOT CLOSED**.
