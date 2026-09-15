@@ -19,7 +19,7 @@ def run() -> int:
     try:
         status = agent.start()
         if status.ok:
-            result = composition.application._dispatcher.dispatch(
+            result = composition.dispatcher.dispatch(
                 make_command("startup-status", "agent.get_status", "startup-status")
             )
             print(result.message)
