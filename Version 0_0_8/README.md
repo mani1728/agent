@@ -1,46 +1,49 @@
-# MT5 Agent — v0.0.7
+# MT5 Agent — v0.0.8
 
-## Agent Configuration & Composition Root Foundation
+## Agent Hosting & Graceful Shutdown Foundation
 
-v0.0.7 formalizes deterministic startup configuration and the application composition root while preserving the v0.0.6 HTTP, security, observability, command, runtime, and MT5 boundaries.
+v0.0.8 adds the application hosting boundary required to run the existing HTTP transport as a long-lived process while preserving Core isolation and all v0.0.7 request/security contracts.
 
 ### Architecture
 
 ```text
-Environment / Process Inputs
-          ↓
-Configuration Adapter
-          ↓
-Immutable AgentConfig
-          ↓
-Composition Root
-   ┌──────┼────────┐
- MT5Port Security Observability
-   └──────┼────────┘
-          ↓
-ApplicationBoundary
-          ↓
-HTTPTransportAdapter
+Process / OS
+    ↓
+Process Signal Adapter [Infrastructure]
+    ↓
+HostingPort
+    ↑
+HTTPServerHost [Infrastructure]
+    ↑
+ApplicationHost [Application]
+   / \
+  ↓   ↓
+Agent HTTP Transport
+  ↓       ↓
+MT5Port ApplicationBoundary
 ```
 
-Core does not read environment variables and does not depend on HTTP, configuration infrastructure, or `MetaTrader5`. Concrete dependencies are assembled only at the composition root.
+`ApplicationHost` coordinates ordering only: Agent start → blocking serve → Agent stop. It does not import HTTP server, socket, signal, Windows Service, or MetaTrader5 APIs.
 
-### Configuration
+### Contracts
 
-Supported process environment inputs:
+- `AgentLifecyclePort.start() -> Status`
+- `AgentLifecyclePort.stop() -> Status`
+- `HostingPort.serve() -> None`
+- `HostingPort.shutdown() -> None`
 
-- `MT5_AGENT_HTTP_HOST` — default `127.0.0.1`
-- `MT5_AGENT_HTTP_PORT` — default `8080`, valid range `1..65535`
-- `MT5_AGENT_HTTP_MAX_REQUEST_BYTES` — default `1048576`, must be positive
-
-Invalid startup configuration fails deterministically before request processing. Configuration failures are startup/infrastructure failures and are not exposed through HTTP request error responses.
+Contracts are additive, transport-neutral, and structurally implemented through dependency injection.
 
 ### Scope
 
-Included: immutable configuration contracts, configuration validation, environment configuration adapter, explicit composition root, configurable HTTP request-body limit, tests, Windows CI, PyInstaller packaging, executable verification, smoke tests, and release documentation.
+Included: hosting contracts, runtime coordinator, concrete standard-library HTTP server host, graceful process shutdown adapter, lifecycle/error ordering, hosting tests, architecture isolation tests, Windows CI/CD, PyInstaller packaging, repository `.gitignore` hygiene, and v0.0.7 documentation closure.
 
-Excluded: trading, order execution, AI/LLM, persistence, secrets storage, JWT/OAuth/OIDC, TLS/mTLS, production IAM, remote configuration, YAML/TOML frameworks, telemetry backends, retry/circuit-breaker infrastructure, WebSocket/Kafka, and Windows Service deployment.
+Excluded: Trading, Orders/Positions, Persistence, Idempotency, Retry, Circuit Breaker, TLS/mTLS, JWT/OAuth/OIDC, Secrets Management, Kafka, WebSocket, Windows Service, AI/LLM, and Strategy Engine.
 
-### Release state
+### Compatibility
 
-Implementation is prepared on `version-0.0.7` for review. Merge, tag, release, release checksum verification, and version closure remain pending explicit approval.
+`POST /command`, request/command contracts, Validation → Authentication → Authorization → Dispatch ordering, identity propagation, and best-effort request observability remain unchanged.
+
+### Development state
+
+Development occurs only on `version-0.0.8`. No v0.0.8 tag or release is created before explicit owner approval after PR review.
