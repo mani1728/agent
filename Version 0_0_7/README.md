@@ -43,4 +43,12 @@ Excluded: trading, order execution, AI/LLM, persistence, secrets storage, JWT/OA
 
 ### Release state
 
-Implementation is prepared on `version-0.0.7` for review. Merge, tag, release, release checksum verification, and version closure remain pending explicit approval.
+v0.0.7 is published and closed.
+
+- PR: `#39` — merged
+- tag: `v0.0.7`
+- finalized main/tag commit: `487db94c8a50f0db6c65d1e9f8fbcbd12aefa81d`
+- release artifact: `MT5Agent-v0.0.7.exe`
+- canonical SHA-256: `38c17331fd3426c18f1c5774cafcdb4186f6810f529b9e1e548c91cf2db275e0`
+
+The tag and published release asset are historical release records and are not rewritten by later documentation corrections.
