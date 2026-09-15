@@ -24,16 +24,20 @@ Validation → Authentication → Authorization → Dispatch ordering is unchang
 
 No trading/order execution, position management, strategy engine, AI/LLM integration, persistence, JWT/OAuth/OIDC, TLS/mTLS, external IAM, secrets manager, remote configuration, YAML/TOML framework, Kafka/WebSocket transport, retry/circuit breaker, telemetry backend, or Windows Service is introduced.
 
-### Artifact
+### Merge state
+
+PR `#39` was merged into `main` at `a93812eee78692692982b831bc2a920ab6d104f6`.
+
+### Release artifact
 
 `MT5Agent-v0.0.7.exe`
 
 SHA-256:
 
-`cd62e24c5eb37b39ecb9c6579e060345fca21b525d4d0e9385e06d3069e0f1da`
+`38c17331fd3426c18f1c5774cafcdb4186f6810f529b9e1e548c91cf2db275e0`
 
 GitHub Actions artifact digest:
 
-`sha256:388756f977e79cd3952a8505b4235a76e0794479214353cfdde0f57f7e97af39`
+`sha256:d26b0432548a0f44962a75ff8288926b107f0cb0dc27d31c8a0e72f48857e46e`
 
-CI test/build/package/smoke verification passed. Tag and GitHub Release publication are the owner handoff after merge.
+Tests, packaging, executable verification and both smoke-test paths passed. The owner can now create tag `v0.0.7`, publish the GitHub Release, and attach the verified executable.
