@@ -18,6 +18,6 @@ analysis = Analysis(
 pyz = PYZ(analysis.pure)
 exe = EXE(
     pyz, analysis.scripts, analysis.binaries, analysis.datas, [],
-    name="MT5Agent-v0.0.7", icon=str(icon_path), debug=False,
+    name="MT5Agent-v0.0.8", icon=str(icon_path), debug=False,
     bootloader_ignore_signals=False, strip=False, upx=False, console=True,
 )
