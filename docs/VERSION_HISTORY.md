@@ -21,64 +21,51 @@ Security contracts and ports, mandatory Authentication-before-Authorization orde
 Standard-library HTTP/JSON `POST /command` adapter, deterministic transport/error mapping, identity propagation, failure isolation, Windows CI/CD and executable packaging.
 
 ## v0.0.7 — Agent Configuration & Composition Root Foundation
+Introduced formal startup configuration and a composition boundary while preserving Core independence.
 
-Introduced a formal startup configuration and composition boundary while preserving Core independence.
-
-### Added
-
-- immutable `AgentConfig` / `HTTPConfig`
+- immutable `AgentConfig` / `HTTPTransportConfig`
 - deterministic `ConfigurationError`
-- `ConfigurationProvider` protocol
-- environment-backed configuration adapter
+- `ConfigurationProvider` protocol and environment adapter
 - explicit composition root
 - configurable HTTP host, port and request-body limit
-- deterministic invalid-startup behavior
-- configuration/composition architecture tests
-- regression coverage for HTTP, security ordering and boundary isolation
-- Windows CI/CD and PyInstaller packaging
-- executable and smoke-test verification
+- Windows CI/CD, PyInstaller packaging and smoke verification
 
-### Architecture
+Release state:
+- PR: `#39` — merged
+- finalized main/tag commit: `487db94c8a50f0db6c65d1e9f8fbcbd12aefa81d`
+- tag: `v0.0.7`
+- GitHub Release: published
+- artifact: `MT5Agent-v0.0.7.exe`
+- canonical SHA-256: `38c17331fd3426c18f1c5774cafcdb4186f6810f529b9e1e548c91cf2db275e0`
 
-```text
-Environment / Process Inputs
-          ↓
-Configuration Adapter
-          ↓
-Immutable AgentConfig
-          ↓
-Composition Root
-   ┌──────┼────────┐
-   ↓      ↓        ↓
-MT5Port Security Observability
-   \       |       /
-    ApplicationBoundary
-            ↓
-    HTTPTransportAdapter
-```
+Historical note: PR #39 references checksum/digest values from an earlier CI artifact. Those values remain part of PR history and are not canonical for the published release asset.
 
-Core does not read environment variables and remains independent of HTTP implementation, security infrastructure, observability backends, external configuration frameworks and the `MetaTrader5` package.
+## v0.0.8 — Agent Hosting & Graceful Shutdown Foundation
+Introduced the application hosting lifecycle needed to operate the existing HTTP transport as a long-running process without coupling Core to HTTP server or OS/process infrastructure.
 
-Security ordering remains:
+- additive `AgentLifecyclePort` and `HostingPort`
+- `ApplicationHost` lifecycle coordinator
+- standard-library `HTTPServerHost`
+- graceful process signal shutdown adapter
+- deterministic startup/hosting/shutdown error precedence and lifecycle exception containment
+- resource cleanup and deadlock-oriented lifecycle tests
+- architecture-isolation and regression tests
+- Windows CI/CD, PyInstaller packaging and executable smoke verification
+- repository `.gitignore` policy modernization
 
-```text
-Validation → Authentication → Authorization → Dispatch
-```
+Release state:
+- PR: `#40` — owner approved for merge
+- final reviewed implementation commit: `ec0585624c4defd30c8d368be8756a33e2d3caa5`
+- tag: `v0.0.8` → `ec0585624c4defd30c8d368be8756a33e2d3caa5`
+- GitHub Release: `MT5 Agent v0.0.8` — published
+- artifact: `MT5Agent-v0.0.8.exe`
+- canonical SHA-256: `e04f497bf3a893aa7bf5dec24bcc19d77930a50e42716dc7b1e5ace7d4641266`
+- final verification workflow: `35013801830` — passed
 
-### Release state
+Manual Windows/MT5 acceptance observed controlled shutdown and `INFO:agent.main:Application host stopped.` after the operator closed MetaTrader 5 and issued Ctrl+C.
 
-- PR: `#39`
-- PR status: merged
-- merge commit: `a93812eee78692692982b831bc2a920ab6d104f6`
-- release artifact: `MT5Agent-v0.0.7.exe`
-- verified executable SHA-256: `38c17331fd3426c18f1c5774cafcdb4186f6810f529b9e1e548c91cf2db275e0`
-- GitHub Actions artifact digest: `sha256:d26b0432548a0f44962a75ff8288926b107f0cb0dc27d31c8a0e72f48857e46e`
-- tag/release publication: owner handoff
-
-### Explicitly not included
-
-Trading/orders/positions, strategy engine, AI/LLM, persistence, JWT/OAuth/OIDC, TLS/mTLS, external IAM, secrets management, remote configuration, YAML/TOML frameworks, telemetry backend, Kafka/WebSocket, retry/circuit breaker and Windows Service.
+Security ordering remains Validation → Authentication → Authorization → Dispatch. Request observability remains best-effort. Trading/orders/positions, strategy engine, AI/LLM, persistence, idempotency, retry/circuit breaker, TLS/mTLS, JWT/OAuth/OIDC, Kafka/WebSocket and Windows Service remain outside scope.
 
 ## Current baseline
 
-`main` contains the completed v0.0.7 implementation and release documentation. New development must branch from the latest finalized `main` after the owner completes tag/release publication and release-asset verification.
+v0.0.8 is the approved release baseline. After PR #40 is merged, future version development must branch from the resulting stable `main` baseline. The published `v0.0.8` tag and release must not be rewritten.

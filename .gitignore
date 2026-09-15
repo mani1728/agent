@@ -1,17 +1,4 @@
-# ==========================================
-# Whitelist: Version 1_0_0 and Version 0_0_1
-# ==========================================
-/*
-!.gitignore
-!Version 1_0_0/
-!Version 1_0_0/**
-!Version 0_0_1/
-!Version 0_0_1/**
-!.github/
-!.github/workflows/
-!.github/workflows/**
-
-# Python
+# Python generated artifacts
 __pycache__/
 *.py[cod]
 *.pyo
@@ -20,29 +7,49 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
-# Build outputs
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build and packaging outputs
 build/
 dist/
+*.spec
 *.spec.bak
-Version 0_0_1/build/
-Version 0_0_1/dist/
 
-# Logs
+# Logs and runtime output
 *.log
-Version 1_0_0/agent/logs/
+logs/
 
-# IDE/editor
-.obsidian/
+# IDE / editor local state
 .idea/
 .vscode/
+.obsidian/
 
-# Documentation excluded from v1
-Version 1_0_0/agent/docs/
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+config.json
+*.pem
+*.key
+*.pfx
+*.p12
 
-# Temporary files
+# Temporary/local artifacts
 *.bak
 *.saved.bak
 *backup*
+*.tmp
+*.temp
 *.zip
-config.json
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
