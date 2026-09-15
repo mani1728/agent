@@ -72,3 +72,50 @@ jobs:
           path: |
             Version 0_0_8/dist/MT5Agent-v0.0.8.exe
             Version 0_0_8/sha256.txt
+
+  diagnostic:
+    runs-on: [self-hosted, Windows, X64, mt5]
+    timeout-minutes: 10
+    steps:
+      - name: Runner information
+        shell: pwsh
+        run: |
+          Write-Host "Runner: $env:RUNNER_NAME"
+          Write-Host "OS: $env:RUNNER_OS"
+          Write-Host "Architecture: $env:RUNNER_ARCH"
+          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsArchitecture
+
+      - name: Verify Git
+        shell: pwsh
+        run: |
+          git --version
+          where.exe git
+
+      - name: Verify Python
+        shell: pwsh
+        run: |
+          python --version
+          py --version
+          where.exe python
+
+      - name: Verify PowerShell
+        shell: pwsh
+        run: |
+          pwsh --version
+          where.exe pwsh
+          $PSVersionTable
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify checkout
+        shell: pwsh
+        run: |
+          Write-Host "Commit: $env:GITHUB_SHA"
+          git status --short
+          git rev-parse --show-toplevel
+
+      - name: Diagnostic complete
+        shell: pwsh
+        run: Write-Host "Self-hosted runner diagnostic completed successfully."
