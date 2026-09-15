@@ -22,63 +22,30 @@ Standard-library HTTP/JSON `POST /command` adapter, deterministic transport/erro
 
 ## v0.0.7 — Agent Configuration & Composition Root Foundation
 
-Introduced a formal startup configuration and composition boundary while preserving Core independence.
+Introduced formal startup configuration and a composition boundary while preserving Core independence.
 
-### Added
-
-- immutable `AgentConfig` / `HTTPConfig`
+- immutable `AgentConfig` / `HTTPTransportConfig`
 - deterministic `ConfigurationError`
-- `ConfigurationProvider` protocol
-- environment-backed configuration adapter
+- `ConfigurationProvider` protocol and environment adapter
 - explicit composition root
 - configurable HTTP host, port and request-body limit
-- deterministic invalid-startup behavior
-- configuration/composition architecture tests
-- regression coverage for HTTP, security ordering and boundary isolation
-- Windows CI/CD and PyInstaller packaging
-- executable and smoke-test verification
+- Windows CI/CD, PyInstaller packaging and smoke verification
 
-### Architecture
+Release state:
 
-```text
-Environment / Process Inputs
-          ↓
-Configuration Adapter
-          ↓
-Immutable AgentConfig
-          ↓
-Composition Root
-   ┌──────┼────────┐
-   ↓      ↓        ↓
-MT5Port Security Observability
-   \       |       /
-    ApplicationBoundary
-            ↓
-    HTTPTransportAdapter
-```
-
-Core does not read environment variables and remains independent of HTTP implementation, security infrastructure, observability backends, external configuration frameworks and the `MetaTrader5` package.
-
-Security ordering remains:
-
-```text
-Validation → Authentication → Authorization → Dispatch
-```
-
-### Release state
-
-- PR: `#39`
-- PR status: merged
+- PR: `#39` — merged
 - merge commit: `a93812eee78692692982b831bc2a920ab6d104f6`
-- release artifact: `MT5Agent-v0.0.7.exe`
-- verified executable SHA-256: `38c17331fd3426c18f1c5774cafcdb4186f6810f529b9e1e548c91cf2db275e0`
-- GitHub Actions artifact digest: `sha256:d26b0432548a0f44962a75ff8288926b107f0cb0dc27d31c8a0e72f48857e46e`
-- tag/release publication: owner handoff
+- finalized main/tag commit: `487db94c8a50f0db6c65d1e9f8fbcbd12aefa81d`
+- tag: `v0.0.7`
+- GitHub Release: published
+- artifact: `MT5Agent-v0.0.7.exe`
+- canonical SHA-256: `38c17331fd3426c18f1c5774cafcdb4186f6810f529b9e1e548c91cf2db275e0`
+- final Actions artifact digest: `sha256:d26b0432548a0f44962a75ff8288926b107f0cb0dc27d31c8a0e72f48857e46e`
 
-### Explicitly not included
+Historical note: PR #39 references checksum/digest values from an earlier CI artifact. Those values remain part of the PR history and are not canonical for the published release asset.
 
-Trading/orders/positions, strategy engine, AI/LLM, persistence, JWT/OAuth/OIDC, TLS/mTLS, external IAM, secrets management, remote configuration, YAML/TOML frameworks, telemetry backend, Kafka/WebSocket, retry/circuit breaker and Windows Service.
+Security ordering remains Validation → Authentication → Authorization → Dispatch. Trading/orders/positions, strategy engine, AI/LLM, persistence, JWT/OAuth/OIDC, TLS/mTLS, Kafka/WebSocket, retry/circuit breaker and Windows Service remained outside scope.
 
 ## Current baseline
 
-`main` contains the completed v0.0.7 implementation and release documentation. New development must branch from the latest finalized `main` after the owner completes tag/release publication and release-asset verification.
+`main@487db94c8a50f0db6c65d1e9f8fbcbd12aefa81d` is the finalized v0.0.7 baseline. v0.0.8 development proceeds only on `version-0.0.8` until explicit merge approval.
