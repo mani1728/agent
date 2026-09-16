@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: [self-hosted, Windows, X64, mt5, mt5agent-win-runner-01]
+    runs-on: self-hosted
     timeout-minutes: 10
     defaults:
       run:
@@ -35,7 +35,7 @@ jobs:
         run: python -m pytest -q
 
   build:
-    runs-on: [self-hosted, Windows, X64, mt5, mt5agent-win-runner-01]
+    runs-on: self-hosted
     needs: test
     timeout-minutes: 15
     defaults:
