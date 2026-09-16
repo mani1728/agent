@@ -54,7 +54,7 @@ Introduced the application hosting lifecycle needed to operate the existing HTTP
 - repository `.gitignore` policy modernization
 
 Release state:
-- PR: `#40` — owner approved for merge
+- PR: `#40` — merged
 - final reviewed implementation commit: `ec0585624c4defd30c8d368be8756a33e2d3caa5`
 - tag: `v0.0.8` → `ec0585624c4defd30c8d368be8756a33e2d3caa5`
 - GitHub Release: `MT5 Agent v0.0.8` — published
@@ -66,6 +66,28 @@ Manual Windows/MT5 acceptance observed controlled shutdown and `INFO:agent.main:
 
 Security ordering remains Validation → Authentication → Authorization → Dispatch. Request observability remains best-effort. Trading/orders/positions, strategy engine, AI/LLM, persistence, idempotency, retry/circuit breaker, TLS/mTLS, JWT/OAuth/OIDC, Kafka/WebSocket and Windows Service remain outside scope.
 
+## v0.0.9 — Operational Lifecycle Observability Foundation
+Introduced operational lifecycle observability as a separate boundary from request-level execution observability while preserving existing Core, Security, Transport and Runtime contracts.
+
+- added `OperationalEventType`, immutable `OperationalEvent`, and `OperationalObservabilityPort`
+- added null operational observer for best-effort observability semantics
+- instrumented `ApplicationHost` lifecycle events for startup, hosting, shutdown and failure paths
+- preserved primary lifecycle failure precedence when observers fail
+- wired operational observability through the composition root
+- added lifecycle ordering, failure-isolation and composition coverage tests
+- consolidated CI/CD into a canonical self-hosted Windows workflow
+- stabilized PyInstaller dependency collection by limiting unnecessary package collection
+- verified Windows executable startup and MetaTrader 5 launch behavior
+
+Release state:
+- PR: `#41` — merged
+- merge commit: `253afc7169afb0f5869625a7fc28bb9087ebb4e4`
+- tag: `v0.0.9` → `253afc7169afb0f5869625a7fc28bb9087ebb4e4`
+- GitHub Release: `MT5 Agent v0.0.9` — published
+- artifact: `MT5Agent-v0.0.9.exe`
+- canonical SHA-256: `d7e1b3ebfd4380afd1749742c2c5c54561461ba40f0d8aedf787c34cd8534b07`
+- CI validation: passed
+
 ## Current baseline
 
-v0.0.8 is the approved release baseline. After PR #40 is merged, future version development must branch from the resulting stable `main` baseline. The published `v0.0.8` tag and release must not be rewritten.
+v0.0.9 is the approved release baseline. Future version development must branch from the resulting stable `main` baseline. Published tags and releases must not be rewritten.
