@@ -5,6 +5,7 @@ import urllib.request
 from agent.adapters.http_transport import HTTPTransportAdapter
 from agent.application.host import ApplicationHost
 from agent.contracts.models import Status
+from agent.contracts.operational_observability import OperationalEventType
 from agent.infrastructure.http_server_host import HTTPServerHost
 
 
@@ -43,6 +44,17 @@ class FakeHosting:
         self.calls.append("hosting.shutdown")
 
 
+class RecordingOperationalObservability:
+    def __init__(self, error=None):
+        self.events = []
+        self.error = error
+
+    def record(self, event):
+        if self.error:
+            raise self.error
+        self.events.append(event)
+
+
 class EchoApplication:
     def handle(self, request):
         from agent.contracts.transport import TransportResponse
@@ -64,35 +76,73 @@ def test_application_host_orders_start_serve_stop():
     assert calls == ["agent.start", "hosting.serve", "agent.stop"]
 
 
+def test_successful_lifecycle_emits_ordered_operational_events():
+    observer = RecordingOperationalObservability()
+    result = ApplicationHost(
+        FakeAgent(),
+        FakeHosting(),
+        operational_observability=observer,
+    ).run()
+
+    assert result.ok
+    assert [event.event_type for event in observer.events] == [
+        OperationalEventType.APPLICATION_STARTING,
+        OperationalEventType.APPLICATION_STARTED,
+        OperationalEventType.HOSTING_STARTED,
+        OperationalEventType.APPLICATION_STOPPING,
+        OperationalEventType.APPLICATION_STOPPED,
+    ]
+    assert all(event.source == "ApplicationHost" for event in observer.events)
+
+
 def test_start_failure_prevents_serving_and_cleanup():
     calls = []
-    result = ApplicationHost(FakeAgent(start_ok=False, calls=calls), FakeHosting(calls=calls)).run()
+    observer = RecordingOperationalObservability()
+    result = ApplicationHost(
+        FakeAgent(start_ok=False, calls=calls),
+        FakeHosting(calls=calls),
+        operational_observability=observer,
+    ).run()
     assert not result.ok
     assert result.code == "agent_start_failed"
     assert calls == ["agent.start"]
+    assert [event.event_type for event in observer.events] == [
+        OperationalEventType.APPLICATION_STARTING,
+        OperationalEventType.APPLICATION_START_FAILED,
+    ]
 
 
 def test_start_exception_is_contained_and_prevents_serving():
     calls = []
+    observer = RecordingOperationalObservability()
     result = ApplicationHost(
         FakeAgent(calls=calls, start_error=RuntimeError("start exploded")),
         FakeHosting(calls=calls),
+        operational_observability=observer,
     ).run()
     assert not result.ok
     assert result.code == "agent_start_failed"
     assert result.message == "Agent startup failed."
     assert calls == ["agent.start"]
+    assert observer.events[-1].event_type == OperationalEventType.APPLICATION_START_FAILED
 
 
 def test_hosting_failure_still_stops_agent_and_remains_primary_failure():
     calls = []
+    observer = RecordingOperationalObservability()
     result = ApplicationHost(
         FakeAgent(stop_ok=False, calls=calls),
         FakeHosting(calls=calls, error=OSError("bind failed")),
+        operational_observability=observer,
     ).run()
     assert not result.ok
     assert result.code == "hosting_failed"
     assert calls == ["agent.start", "hosting.serve", "agent.stop"]
+    assert [event.event_type for event in observer.events][-3:] == [
+        OperationalEventType.HOSTING_FAILED,
+        OperationalEventType.APPLICATION_STOPPING,
+        OperationalEventType.APPLICATION_STOP_FAILED,
+    ]
 
 
 def test_hosting_failure_remains_primary_when_stop_raises():
@@ -107,9 +157,15 @@ def test_hosting_failure_remains_primary_when_stop_raises():
 
 
 def test_stop_failure_is_reported_after_normal_serving():
-    result = ApplicationHost(FakeAgent(stop_ok=False), FakeHosting()).run()
+    observer = RecordingOperationalObservability()
+    result = ApplicationHost(
+        FakeAgent(stop_ok=False),
+        FakeHosting(),
+        operational_observability=observer,
+    ).run()
     assert not result.ok
     assert result.code == "agent_stop_failed"
+    assert observer.events[-1].event_type == OperationalEventType.APPLICATION_STOP_FAILED
 
 
 def test_stop_exception_is_contained_after_normal_serving():
@@ -120,6 +176,18 @@ def test_stop_exception_is_contained_after_normal_serving():
     assert not result.ok
     assert result.code == "agent_stop_failed"
     assert result.message == "Agent cleanup failed."
+
+
+def test_operational_observer_failure_does_not_change_lifecycle_result():
+    observer = RecordingOperationalObservability(error=RuntimeError("observer unavailable"))
+    result = ApplicationHost(
+        FakeAgent(),
+        FakeHosting(),
+        operational_observability=observer,
+    ).run()
+
+    assert result.ok
+    assert result.code == "stopped"
 
 
 def test_http_server_host_serves_and_shuts_down_cleanly():
