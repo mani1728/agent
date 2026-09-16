@@ -1,0 +1,131 @@
+name: MT5 Agent CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mt5-agent-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  VERSION_DIR: Version 0_0_9
+  ARTIFACT_NAME: MT5Agent-v0.0.9
+
+jobs:
+  test:
+    name: Test
+    runs-on: [self-hosted, Windows, X64, mt5, build, mt5agent-win-runner-01]
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: ${{ env.VERSION_DIR }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Verify runner toolchain
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python --version
+          python -m pip --version
+          pwsh --version
+          git --version
+
+      - name: Install dependencies
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install -r requirements.txt
+
+      - name: Run test suite
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pytest -q
+
+  build:
+    name: Build
+    needs: test
+    runs-on: [self-hosted, Windows, X64, mt5, build, mt5agent-win-runner-01]
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: ${{ env.VERSION_DIR }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Verify runner toolchain
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python --version
+          python -m pip --version
+          pwsh --version
+          git --version
+
+      - name: Install dependencies
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install -r requirements.txt
+
+      - name: Generate application icon
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python make_icon.py
+
+      - name: Build executable
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m PyInstaller deployment/Agent.spec --clean --noconfirm
+
+      - name: Verify executable
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
+          if (-not (Test-Path $exe -PathType Leaf)) {
+            throw "Expected executable was not created: $exe"
+          }
+
+      - name: Smoke test unavailable terminal
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
+          $process = Start-Process -FilePath $exe -Wait -PassThru -NoNewWindow
+          if ($process.ExitCode -ne 1) {
+            throw "Expected exit code 1 when terminal is unavailable; got $($process.ExitCode)"
+          }
+
+      - name: Smoke test invalid configuration
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:MT5_AGENT_HTTP_PORT = 'invalid'
+          $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
+          $process = Start-Process -FilePath $exe -Wait -PassThru -NoNewWindow
+          if ($process.ExitCode -ne 2) {
+            throw "Expected exit code 2 for invalid startup configuration; got $($process.ExitCode)"
+          }
+
+      - name: Generate SHA-256 checksum
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "SHA256=$hash" | Set-Content -Path sha256.txt -Encoding utf8
+          Get-Content sha256.txt
+
+      - name: Upload executable and checksum
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          if-no-files-found: error
+          path: |
+            ${{ env.VERSION_DIR }}/dist/${{ env.ARTIFACT_NAME }}.exe
+            ${{ env.VERSION_DIR }}/sha256.txt
