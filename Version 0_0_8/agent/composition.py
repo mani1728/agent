@@ -7,7 +7,6 @@ from agent.application.boundary import ApplicationBoundary
 from agent.application.dispatcher import CommandDispatcher
 from agent.application.host import ApplicationHost
 from agent.contracts.configuration import AgentConfig
-from agent.contracts.operational_observability import OperationalObservabilityPort
 from agent.contracts.ports import AuthenticationPort, AuthorizationPort, HostingPort, MT5Port, ObservabilityPort
 from agent.core.agent import Agent
 from agent.infrastructure.http_server_host import HTTPServerHost
@@ -31,7 +30,6 @@ def compose_agent(
     authorizer: AuthorizationPort | None = None,
     observability: ObservabilityPort | None = None,
     hosting: HostingPort | None = None,
-    operational_observability: OperationalObservabilityPort | None = None,
 ) -> AgentComposition:
     """Single composition root for concrete application dependencies."""
     agent = Agent(mt5 or MT5Adapter())
@@ -41,9 +39,5 @@ def compose_agent(
     concrete_hosting = hosting or HTTPServerHost(
         lambda: transport.create_server(config.http.host, config.http.port)
     )
-    host = ApplicationHost(
-        agent,
-        concrete_hosting,
-        operational_observability=operational_observability,
-    )
+    host = ApplicationHost(agent, concrete_hosting)
     return AgentComposition(config, agent, dispatcher, application, transport, concrete_hosting, host)
