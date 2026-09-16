@@ -1,17 +1,20 @@
 name: MT5 Agent CI
 
 on:
-  push:
-    branches: [version-0.0.9]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: mt5-agent-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    runs-on: [self-hosted, Windows, mt5agent-win-runner-01]
+    runs-on: [self-hosted, Windows, X64, mt5, mt5agent-win-runner-01]
     timeout-minutes: 10
     defaults:
       run:
@@ -32,7 +35,7 @@ jobs:
         run: python -m pytest -q
 
   build:
-    runs-on: [self-hosted, Windows, mt5agent-win-runner-01]
+    runs-on: [self-hosted, Windows, X64, mt5, mt5agent-win-runner-01]
     needs: test
     timeout-minutes: 15
     defaults:
