@@ -28,9 +28,9 @@ class HealthStatus:
 
 
 @dataclass(frozen=True)
-class AgentConfig:
+class AgentIdentity:
     app_name: str = "Trading Agent"
-    version: str = "0.0.6"
+    version: str = "0.0.8"
 
 
 @dataclass(frozen=True)

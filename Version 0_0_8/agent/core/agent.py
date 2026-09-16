@@ -1,12 +1,12 @@
 import logging
 
-from agent.contracts.models import AgentConfig, HealthStatus, LifecycleState, Status
+from agent.contracts.models import AgentIdentity, HealthStatus, LifecycleState, Status
 from agent.contracts.ports import MT5Port
 
 
 class Agent:
-    def __init__(self, mt5_adapter: MT5Port, config: AgentConfig | None = None, logger: logging.Logger | None = None) -> None:
-        self.config = config or AgentConfig()
+    def __init__(self, mt5_adapter: MT5Port, identity: AgentIdentity | None = None, logger: logging.Logger | None = None) -> None:
+        self.identity = identity or AgentIdentity()
         self.logger = logger or logging.getLogger(__name__)
         self.mt5 = mt5_adapter
         self._state = LifecycleState.CREATED

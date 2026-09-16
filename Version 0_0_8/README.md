@@ -50,11 +50,13 @@ Final verification workflow `35013801830` passed tests, Windows build, executabl
 
 The owner performed a Windows/MT5 acceptance run and observed controlled shutdown with `INFO:agent.main:Application host stopped.`.
 
-- PR: `#40`
+- PR: `#40` — merged
 - final reviewed implementation commit: `ec0585624c4defd30c8d368be8756a33e2d3caa5`
+- `main` merge commit: `a181b6364eb87597de10b0a781bbf45892d6cec9`
 - tag: `v0.0.8` → `ec0585624c4defd30c8d368be8756a33e2d3caa5`
 - GitHub Release: `MT5 Agent v0.0.8` — published
 - release artifact: `MT5Agent-v0.0.8.exe`
 - canonical SHA-256: `e04f497bf3a893aa7bf5dec24bcc19d77930a50e42716dc7b1e5ace7d4641266`
+- version status: **CLOSED**
 
-The version is approved for merge to `main`. The published tag/release are historical release records and must not be rewritten.
+The published tag/release are intentional historical release records and must not be rewritten. They predate closure documentation and the final merge commit on `main`.
