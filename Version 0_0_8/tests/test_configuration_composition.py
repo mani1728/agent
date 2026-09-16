@@ -16,6 +16,14 @@ class FakeMT5:
         return True
 
 
+class RecordingOperationalObservability:
+    def __init__(self):
+        self.events = []
+
+    def record(self, event):
+        self.events.append(event)
+
+
 def test_http_config_defaults_are_deterministic():
     config = AgentConfig()
     assert config.http.host == "127.0.0.1"
@@ -57,6 +65,13 @@ def test_composition_injects_mt5_and_transport_configuration():
     assert composition.agent.mt5 is fake
     assert composition.config is config
     assert composition.http_transport._max_request_bytes == 1234
+
+
+def test_composition_injects_operational_observability_into_host():
+    observer = RecordingOperationalObservability()
+    composition = compose_agent(AgentConfig(), mt5=FakeMT5(), operational_observability=observer)
+
+    assert composition.host._operational_observability is observer
 
 
 def test_core_does_not_import_environment_or_http_adapter():
