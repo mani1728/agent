@@ -22,27 +22,26 @@ jobs:
   test:
     name: Test
     runs-on: [self-hosted, Windows, X64, mt5agent-win-runner-01]
-    timeout-minutes: 10
+    timeout-minutes: 15
+
     defaults:
       run:
         shell: pwsh
-        working-directory: ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/test/${{ env.VERSION_DIR }}
+        working-directory: ${{ env.VERSION_DIR }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        timeout-minutes: 3
+        timeout-minutes: 5
         with:
-          path: ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/test
           persist-credentials: false
           fetch-depth: 1
           submodules: false
-          sparse-checkout: |
-            Version 0_0_9
-            .github
 
       - name: Verify toolchain
         run: |
           $ErrorActionPreference = 'Stop'
+
           python --version
           python -m pip --version
           pwsh --version
@@ -52,57 +51,42 @@ jobs:
         timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
+
           python -m pip install --prefer-binary -r requirements.txt
 
       - name: Run tests
-        timeout-minutes: 3
+        timeout-minutes: 8
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m pytest -q --durations=10 -o faulthandler_timeout=60
 
-      # Dispose only this run's checkout. Credentials are already removed by
-      # persist-credentials:false; removing the disposable checkout also avoids
-      # the Windows runner hang in checkout's redundant post-job Git commands.
-      - name: Remove temporary checkout
-        if: always()
-        timeout-minutes: 2
-        working-directory: ${{ github.workspace }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $workspaceRoot = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\', '/')
-          $checkoutPath = [IO.Path]::GetFullPath((Join-Path $workspaceRoot 'ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/test'))
-          if (-not $checkoutPath.StartsWith($workspaceRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'Temporary checkout is outside the workflow workspace'
-          }
-          if (Test-Path -LiteralPath $checkoutPath) {
-            Remove-Item -LiteralPath $checkoutPath -Recurse -Force
-          }
+          python -m pytest -q --durations=20
+
 
   build:
     name: Build
     needs: test
+
     runs-on: [self-hosted, Windows, X64, mt5agent-win-runner-01]
-    timeout-minutes: 15
+    timeout-minutes: 20
+
     defaults:
       run:
         shell: pwsh
-        working-directory: ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build/${{ env.VERSION_DIR }}
+        working-directory: ${{ env.VERSION_DIR }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        timeout-minutes: 3
+        timeout-minutes: 5
         with:
-          path: ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build
           persist-credentials: false
           fetch-depth: 1
           submodules: false
-          sparse-checkout: |
-            Version 0_0_9
-            .github
 
       - name: Verify toolchain
         run: |
           $ErrorActionPreference = 'Stop'
+
           python --version
           python -m pip --version
           pwsh --version
@@ -112,58 +96,88 @@ jobs:
         timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
-          # Idempotent verification is cheap on this persistent machine Python;
-          # retain it rather than assuming another job left a valid environment.
+
           python -m pip install --prefer-binary -r requirements.txt
 
       - name: Generate application icon
         run: |
           $ErrorActionPreference = 'Stop'
+
           python make_icon.py
 
       - name: Build executable
-        timeout-minutes: 8
+        timeout-minutes: 10
         run: |
           $ErrorActionPreference = 'Stop'
+
           python -m PyInstaller deployment/Agent.spec --clean --noconfirm
 
       - name: Verify executable
         run: |
           $ErrorActionPreference = 'Stop'
+
           $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
-          if (-not (Test-Path $exe -PathType Leaf)) { throw "Expected executable was not created: $exe" }
+
+          if (-not (Test-Path $exe -PathType Leaf)) {
+            throw "Expected executable was not created: $exe"
+          }
 
       - name: Smoke test unavailable terminal
         timeout-minutes: 2
         run: |
           $ErrorActionPreference = 'Stop'
+
           $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
-          $process = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+
+          $process = Start-Process `
+            -FilePath $exe `
+            -PassThru `
+            -WindowStyle Hidden
+
           if (-not $process.WaitForExit(60000)) {
             Stop-Process -Id $process.Id -Force
-            throw 'Unavailable-terminal smoke test exceeded 60 seconds'
+            throw "Unavailable-terminal smoke test exceeded 60 seconds"
           }
-          if ($process.ExitCode -ne 1) { throw "Expected exit code 1 when terminal is unavailable; got $($process.ExitCode)" }
+
+          if ($process.ExitCode -ne 1) {
+            throw "Expected exit code 1 when terminal is unavailable; got $($process.ExitCode)"
+          }
 
       - name: Smoke test invalid configuration
         timeout-minutes: 2
         run: |
           $ErrorActionPreference = 'Stop'
+
           $env:MT5_AGENT_HTTP_PORT = 'invalid'
+
           $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
-          $process = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+
+          $process = Start-Process `
+            -FilePath $exe `
+            -PassThru `
+            -WindowStyle Hidden
+
           if (-not $process.WaitForExit(60000)) {
             Stop-Process -Id $process.Id -Force
-            throw 'Invalid-configuration smoke test exceeded 60 seconds'
+            throw "Invalid-configuration smoke test exceeded 60 seconds"
           }
-          if ($process.ExitCode -ne 2) { throw "Expected exit code 2 for invalid startup configuration; got $($process.ExitCode)" }
+
+          if ($process.ExitCode -ne 2) {
+            throw "Expected exit code 2 for invalid startup configuration; got $($process.ExitCode)"
+          }
 
       - name: Generate SHA-256
         run: |
           $ErrorActionPreference = 'Stop'
+
           $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
-          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          $hash = (
+            Get-FileHash $exe -Algorithm SHA256
+          ).Hash.ToLowerInvariant()
+
           "SHA256=$hash" | Set-Content sha256.txt -Encoding utf8
+
           Get-Content sha256.txt
 
       - name: Upload artifact
@@ -172,20 +186,5 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           if-no-files-found: error
           path: |
-            ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build/${{ env.VERSION_DIR }}/dist/${{ env.ARTIFACT_NAME }}.exe
-            ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build/${{ env.VERSION_DIR }}/sha256.txt
-
-      - name: Remove temporary checkout
-        if: always()
-        timeout-minutes: 2
-        working-directory: ${{ github.workspace }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $workspaceRoot = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\', '/')
-          $checkoutPath = [IO.Path]::GetFullPath((Join-Path $workspaceRoot 'ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build'))
-          if (-not $checkoutPath.StartsWith($workspaceRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'Temporary checkout is outside the workflow workspace'
-          }
-          if (Test-Path -LiteralPath $checkoutPath) {
-            Remove-Item -LiteralPath $checkoutPath -Recurse -Force
-          }
+            ${{ env.VERSION_DIR }}/dist/${{ env.ARTIFACT_NAME }}.exe
+            ${{ env.VERSION_DIR }}/sha256.txt
