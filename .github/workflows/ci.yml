@@ -31,10 +31,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         timeout-minutes: 3
-        env:
-          # Fresh v5-only checkout: no inherited v6 credential files to scan.
-          # Normal v5 token/SSH cleanup remains enabled, including the post step.
-          ACTIONS_CHECKOUT_SKIP_V6_CLEANUP: 'true'
         with:
           path: ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/test
           persist-credentials: false
@@ -64,6 +60,24 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python -m pytest -q --durations=10 -o faulthandler_timeout=60
 
+      # Dispose only this run's checkout. Credentials are already removed by
+      # persist-credentials:false; removing the disposable checkout also avoids
+      # the Windows runner hang in checkout's redundant post-job Git commands.
+      - name: Remove temporary checkout
+        if: always()
+        timeout-minutes: 2
+        working-directory: ${{ github.workspace }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $workspaceRoot = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\', '/')
+          $checkoutPath = [IO.Path]::GetFullPath((Join-Path $workspaceRoot 'ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/test'))
+          if (-not $checkoutPath.StartsWith($workspaceRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Temporary checkout is outside the workflow workspace'
+          }
+          if (Test-Path -LiteralPath $checkoutPath) {
+            Remove-Item -LiteralPath $checkoutPath -Recurse -Force
+          }
+
   build:
     name: Build
     needs: test
@@ -77,9 +91,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         timeout-minutes: 3
-        env:
-          # Match Test's isolated v5 checkout; do not scan unrelated v6 state.
-          ACTIONS_CHECKOUT_SKIP_V6_CLEANUP: 'true'
         with:
           path: ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build
           persist-credentials: false
@@ -163,3 +174,18 @@ jobs:
           path: |
             ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build/${{ env.VERSION_DIR }}/dist/${{ env.ARTIFACT_NAME }}.exe
             ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build/${{ env.VERSION_DIR }}/sha256.txt
+
+      - name: Remove temporary checkout
+        if: always()
+        timeout-minutes: 2
+        working-directory: ${{ github.workspace }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $workspaceRoot = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\', '/')
+          $checkoutPath = [IO.Path]::GetFullPath((Join-Path $workspaceRoot 'ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build'))
+          if (-not $checkoutPath.StartsWith($workspaceRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Temporary checkout is outside the workflow workspace'
+          }
+          if (Test-Path -LiteralPath $checkoutPath) {
+            Remove-Item -LiteralPath $checkoutPath -Recurse -Force
+          }
