@@ -31,6 +31,12 @@ class CommandDispatcher:
             raise ValueError("handler must be callable")
         self._handlers[command_type] = handler
 
+    def register_capability_handlers(self, capability_provider: Any) -> None:
+        from agent.application.capability_commands import build_capability_handlers
+
+        for command_type, handler in build_capability_handlers(capability_provider).items():
+            self.register(command_type, handler)
+
     def dispatch(self, command: Command) -> CommandResult:
         try:
             validate_command(command)
