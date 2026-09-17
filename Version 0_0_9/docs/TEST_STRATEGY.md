@@ -1,27 +1,44 @@
-# Test Strategy — v0.0.8
+# Test Strategy — v0.1.0
 
-## Unit lifecycle tests
+## Contract tests
 
-Use injected fake Agent lifecycle and Hosting ports to verify:
+Verify:
 
-- start → serve → stop ordering;
-- startup failure prevents serving;
-- hosting failure still triggers cleanup;
-- hosting failure remains primary when cleanup also fails;
-- cleanup-only failure is deterministic.
+- `CapabilityDescriptor` validation;
+- `RuntimeInformationContract` validation;
+- schema version handling;
+- immutable contract behavior.
 
-## Hosting integration
+## Serialization tests
 
-Run a standard-library HTTP server on loopback with an ephemeral port, send a valid `POST /command`, request `HostingPort.shutdown()`, and verify the serving thread exits and the listening resource is closed.
+Verify JSON serialization and reconstruction of capability and runtime information contracts.
+
+## Registry tests
+
+Verify:
+
+- capability registration;
+- validation during registration;
+- immutable runtime discovery behavior.
+
+## Command integration tests
+
+Verify:
+
+- `agent.get_capabilities` execution;
+- `agent.get_runtime_info` execution;
+- CommandResult integration;
+- deterministic error mapping.
 
 ## Architecture isolation
 
-Source-level isolation tests reject HTTP server, signal, socket, and MetaTrader5 infrastructure imports from Core/Contracts and reject process/transport dependencies from `ApplicationHost`.
+Reject dependencies from capability components on:
+
+- HTTP transport;
+- persistence;
+- MetaTrader5 infrastructure;
+- external frameworks.
 
 ## Regression
 
-Retain v0.0.7 configuration/composition and HTTP transport tests, including security ordering, identity propagation, request-size validation, failure sanitization, and best-effort observer isolation.
-
-## Windows CI / packaging
-
-The v0.0.8 workflow runs pytest on Python 3.11, builds `MT5Agent-v0.0.8.exe` with PyInstaller, verifies the executable, verifies deterministic unavailable-MT5 and invalid-configuration exit paths, calculates SHA-256, and uploads the executable plus checksum as a workflow artifact.
+Retain v0.0.9 lifecycle, security ordering, transport behavior, error mapping, composition, and observability tests.
