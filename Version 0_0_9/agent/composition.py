@@ -8,6 +8,7 @@ from agent.application.dispatcher import CommandDispatcher
 from agent.application.host import ApplicationHost
 from agent.application.registry.capability import InMemoryCapabilityRegistry
 from agent.contracts.configuration import AgentConfig
+from agent.contracts.runtime_information import RuntimeInformationContract
 from agent.contracts.operational_observability import OperationalObservabilityPort
 from agent.contracts.ports import AuthenticationPort, AuthorizationPort, HostingPort, MT5Port, ObservabilityPort
 from agent.core.agent import Agent
@@ -37,7 +38,16 @@ def compose_agent(
     """Single composition root for concrete application dependencies."""
     agent = Agent(mt5 or MT5Adapter())
 
-    capability_registry = InMemoryCapabilityRegistry([])
+    capability_registry = InMemoryCapabilityRegistry(
+        (),
+        lambda: RuntimeInformationContract(
+            agent_name=agent.identity.app_name,
+            agent_version=agent.identity.version,
+            schema_version="1",
+            lifecycle_state=agent.state.value,
+            capabilities=capability_registry.get_capabilities(),
+        ),
+    )
     dispatcher = build_dispatcher(agent, capability_provider=capability_registry)
 
     application = ApplicationBoundary(dispatcher, authenticator, authorizer, observability)
