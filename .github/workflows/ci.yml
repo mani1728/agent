@@ -14,7 +14,7 @@ concurrency:
 
 env:
   VERSION_DIR: Version 0_0_9
-  ARTIFACT_NAME: MT5Agent-v0.0.9
+  ARTIFACT_NAME: MT5Agent-v0.1.0
 
 jobs:
   test:
