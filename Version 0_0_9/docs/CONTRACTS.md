@@ -1,41 +1,48 @@
-# Contracts — v0.0.8
+# Contracts — v0.1.0
 
-v0.0.8 preserves all v0.0.7 contracts and adds two transport-neutral runtime protocols.
+## CapabilityDescriptor
 
-## AgentLifecyclePort
+Immutable capability metadata contract.
 
-```python
-@runtime_checkable
-class AgentLifecyclePort(Protocol):
-    def start(self) -> Status: ...
-    def stop(self) -> Status: ...
-```
+Fields:
 
-Invariants:
+- `name`
+- `version`
+- `schema_version`
+- `metadata`
 
-- returns existing immutable `Status` values;
-- exposes no MT5 implementation details;
-- exposes no HTTP, signal, socket, process, or deployment APIs;
-- the existing `Agent` satisfies the protocol structurally.
+Validation guarantees deterministic capability identification and serialization.
 
-## HostingPort
+## RuntimeInformationContract
 
-```python
-@runtime_checkable
-class HostingPort(Protocol):
-    def serve(self) -> None: ...
-    def shutdown(self) -> None: ...
-```
+Immutable runtime snapshot contract containing:
 
-Invariants:
+- agent identity;
+- runtime version;
+- schema version;
+- lifecycle state;
+- available capabilities.
 
-- `serve()` represents a blocking serving loop;
-- `shutdown()` requests graceful termination of an active or pending serving loop;
-- no HTTP/server/socket/signal type is part of the contract;
-- concrete hosting is injected through the composition root.
+## CapabilityProviderPort
 
-## ApplicationHost
+Application/Core boundary contract responsible for capability discovery.
 
-`ApplicationHost` is an application service/coordinator, not a Port and not a second domain state machine. `run() -> Status` enforces Agent start → serve → Agent stop ordering and deterministic failure precedence.
+It must not depend on:
 
-No existing Command, Transport, Security, Observability, Configuration, ApplicationPort, or MT5Port contract is broken or replaced.
+- HTTP;
+- persistence;
+- MetaTrader5 package;
+- external APIs.
+
+## Commands
+
+Capability discovery is exposed through existing command contracts:
+
+- `agent.get_capabilities`
+- `agent.get_runtime_info`
+
+Responses continue to use `CommandResult` with versioned payload schemas.
+
+## Compatibility
+
+Existing Command, Security, Transport, Observability, Configuration, and MT5Port contracts remain unchanged.
