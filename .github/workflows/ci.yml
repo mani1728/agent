@@ -15,19 +15,34 @@ concurrency:
 env:
   VERSION_DIR: Version 0_0_9
   ARTIFACT_NAME: MT5Agent-v0.1.0
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+  PIP_NO_INPUT: '1'
 
 jobs:
   test:
     name: Test
-    runs-on: self-hosted
+    runs-on: [self-hosted, Windows, X64, mt5agent-win-runner-01]
     timeout-minutes: 10
     defaults:
       run:
         shell: pwsh
-        working-directory: ${{ env.VERSION_DIR }}
+        working-directory: ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/test/${{ env.VERSION_DIR }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        timeout-minutes: 3
+        env:
+          # Fresh v5-only checkout: no inherited v6 credential files to scan.
+          # Normal v5 token/SSH cleanup remains enabled, including the post step.
+          ACTIONS_CHECKOUT_SKIP_V6_CLEANUP: 'true'
+        with:
+          path: ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/test
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          sparse-checkout: |
+            Version 0_0_9
+            .github
 
       - name: Verify toolchain
         run: |
@@ -38,27 +53,41 @@ jobs:
           git --version
 
       - name: Install dependencies
+        timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m pip install -r requirements.txt
+          python -m pip install --prefer-binary -r requirements.txt
 
       - name: Run tests
+        timeout-minutes: 3
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m pytest -q
+          python -m pytest -q --durations=10 -o faulthandler_timeout=60
 
   build:
     name: Build
     needs: test
-    runs-on: self-hosted
+    runs-on: [self-hosted, Windows, X64, mt5agent-win-runner-01]
     timeout-minutes: 15
     defaults:
       run:
         shell: pwsh
-        working-directory: ${{ env.VERSION_DIR }}
+        working-directory: ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build/${{ env.VERSION_DIR }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        timeout-minutes: 3
+        env:
+          # Match Test's isolated v5 checkout; do not scan unrelated v6 state.
+          ACTIONS_CHECKOUT_SKIP_V6_CLEANUP: 'true'
+        with:
+          path: ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          sparse-checkout: |
+            Version 0_0_9
+            .github
 
       - name: Verify toolchain
         run: |
@@ -69,9 +98,12 @@ jobs:
           git --version
 
       - name: Install dependencies
+        timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m pip install -r requirements.txt
+          # Idempotent verification is cheap on this persistent machine Python;
+          # retain it rather than assuming another job left a valid environment.
+          python -m pip install --prefer-binary -r requirements.txt
 
       - name: Generate application icon
         run: |
@@ -79,6 +111,7 @@ jobs:
           python make_icon.py
 
       - name: Build executable
+        timeout-minutes: 8
         run: |
           $ErrorActionPreference = 'Stop'
           python -m PyInstaller deployment/Agent.spec --clean --noconfirm
@@ -90,18 +123,28 @@ jobs:
           if (-not (Test-Path $exe -PathType Leaf)) { throw "Expected executable was not created: $exe" }
 
       - name: Smoke test unavailable terminal
+        timeout-minutes: 2
         run: |
           $ErrorActionPreference = 'Stop'
           $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
-          $process = Start-Process -FilePath $exe -Wait -PassThru -NoNewWindow
+          $process = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+          if (-not $process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id -Force
+            throw 'Unavailable-terminal smoke test exceeded 60 seconds'
+          }
           if ($process.ExitCode -ne 1) { throw "Expected exit code 1 when terminal is unavailable; got $($process.ExitCode)" }
 
       - name: Smoke test invalid configuration
+        timeout-minutes: 2
         run: |
           $ErrorActionPreference = 'Stop'
           $env:MT5_AGENT_HTTP_PORT = 'invalid'
           $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
-          $process = Start-Process -FilePath $exe -Wait -PassThru -NoNewWindow
+          $process = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+          if (-not $process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id -Force
+            throw 'Invalid-configuration smoke test exceeded 60 seconds'
+          }
           if ($process.ExitCode -ne 2) { throw "Expected exit code 2 for invalid startup configuration; got $($process.ExitCode)" }
 
       - name: Generate SHA-256
@@ -118,5 +161,5 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           if-no-files-found: error
           path: |
-            ${{ env.VERSION_DIR }}/dist/${{ env.ARTIFACT_NAME }}.exe
-            ${{ env.VERSION_DIR }}/sha256.txt
+            ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build/${{ env.VERSION_DIR }}/dist/${{ env.ARTIFACT_NAME }}.exe
+            ci-v5/${{ github.run_id }}-${{ github.run_attempt }}/build/${{ env.VERSION_DIR }}/sha256.txt
