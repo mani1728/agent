@@ -1,3 +1,7 @@
+# LEGACY: retained until the GitLab pipeline has passed on registered runners.
+# This workflow describes the pre-migration layout and only runs against a
+# historical ref that still contains Version 0_0_9 (for example 1a133e6).
+# It is not a working fallback for the canonical root tree. See docs/CI.md.
 name: MT5 Agent CI
 
 on:
@@ -14,102 +18,170 @@ concurrency:
 
 env:
   VERSION_DIR: Version 0_0_9
-  ARTIFACT_NAME: MT5Agent-v0.0.9
+  ARTIFACT_NAME: MT5Agent-v0.1.0
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+  PIP_NO_INPUT: '1'
 
 jobs:
   test:
     name: Test
-    runs-on: self-hosted
-    timeout-minutes: 10
+    runs-on: [self-hosted, Windows, X64, mt5agent-win-runner-01]
+    timeout-minutes: 15
+
     defaults:
       run:
         shell: pwsh
         working-directory: ${{ env.VERSION_DIR }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
 
       - name: Verify toolchain
         run: |
           $ErrorActionPreference = 'Stop'
+
           python --version
           python -m pip --version
           pwsh --version
           git --version
 
       - name: Install dependencies
+        timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m pip install -r requirements.txt
+
+          python -m pip install --prefer-binary -r requirements.txt
 
       - name: Run tests
+        timeout-minutes: 8
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m pytest -q
+
+          python -m pytest -q --durations=20
+
 
   build:
     name: Build
     needs: test
-    runs-on: self-hosted
-    timeout-minutes: 15
+
+    runs-on: [self-hosted, Windows, X64, mt5agent-win-runner-01]
+    timeout-minutes: 20
+
     defaults:
       run:
         shell: pwsh
         working-directory: ${{ env.VERSION_DIR }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
 
       - name: Verify toolchain
         run: |
           $ErrorActionPreference = 'Stop'
+
           python --version
           python -m pip --version
           pwsh --version
           git --version
 
       - name: Install dependencies
+        timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m pip install -r requirements.txt
+
+          python -m pip install --prefer-binary -r requirements.txt
 
       - name: Generate application icon
         run: |
           $ErrorActionPreference = 'Stop'
+
           python make_icon.py
 
       - name: Build executable
+        timeout-minutes: 10
         run: |
           $ErrorActionPreference = 'Stop'
+
           python -m PyInstaller deployment/Agent.spec --clean --noconfirm
 
       - name: Verify executable
         run: |
           $ErrorActionPreference = 'Stop'
+
           $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
-          if (-not (Test-Path $exe -PathType Leaf)) { throw "Expected executable was not created: $exe" }
+
+          if (-not (Test-Path $exe -PathType Leaf)) {
+            throw "Expected executable was not created: $exe"
+          }
 
       - name: Smoke test unavailable terminal
+        timeout-minutes: 2
         run: |
           $ErrorActionPreference = 'Stop'
+
           $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
-          $process = Start-Process -FilePath $exe -Wait -PassThru -NoNewWindow
-          if ($process.ExitCode -ne 1) { throw "Expected exit code 1 when terminal is unavailable; got $($process.ExitCode)" }
+
+          $process = Start-Process `
+            -FilePath $exe `
+            -PassThru `
+            -WindowStyle Hidden
+
+          if (-not $process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id -Force
+            throw "Unavailable-terminal smoke test exceeded 60 seconds"
+          }
+
+          if ($process.ExitCode -ne 1) {
+            throw "Expected exit code 1 when terminal is unavailable; got $($process.ExitCode)"
+          }
 
       - name: Smoke test invalid configuration
+        timeout-minutes: 2
         run: |
           $ErrorActionPreference = 'Stop'
+
           $env:MT5_AGENT_HTTP_PORT = 'invalid'
+
           $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
-          $process = Start-Process -FilePath $exe -Wait -PassThru -NoNewWindow
-          if ($process.ExitCode -ne 2) { throw "Expected exit code 2 for invalid startup configuration; got $($process.ExitCode)" }
+
+          $process = Start-Process `
+            -FilePath $exe `
+            -PassThru `
+            -WindowStyle Hidden
+
+          if (-not $process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id -Force
+            throw "Invalid-configuration smoke test exceeded 60 seconds"
+          }
+
+          if ($process.ExitCode -ne 2) {
+            throw "Expected exit code 2 for invalid startup configuration; got $($process.ExitCode)"
+          }
 
       - name: Generate SHA-256
         run: |
           $ErrorActionPreference = 'Stop'
+
           $exe = "dist\${{ env.ARTIFACT_NAME }}.exe"
-          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          $hash = (
+            Get-FileHash $exe -Algorithm SHA256
+          ).Hash.ToLowerInvariant()
+
           "SHA256=$hash" | Set-Content sha256.txt -Encoding utf8
+
           Get-Content sha256.txt
 
       - name: Upload artifact
