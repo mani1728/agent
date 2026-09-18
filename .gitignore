@@ -20,7 +20,12 @@ env/
 build/
 dist/
 *.spec
+!/deployment/*.spec
 *.spec.bak
+/deployment/MT5Agent.ico
+/sha256.txt
+/reports/
+/junit*.xml
 
 # Logs and runtime output
 *.log
@@ -48,6 +53,15 @@ config.json
 *.tmp
 *.temp
 *.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+
+# Local historical material (not runtime source)
+/old_project_structure/
+/comperss/
 
 # OS metadata
 .DS_Store

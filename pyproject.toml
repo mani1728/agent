@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mt5-agent"
+description = "MT5 lifecycle, HTTP command boundary, and runtime capability discovery"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version", "dependencies"]
+
+[tool.setuptools.dynamic]
+# Preserve existing package metadata. Its mismatch with the development label is
+# tracked in docs/KNOWN_ISSUES.md; a layout migration must not silently fix it.
+version = {attr = "agent.__version__"}
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent", "agent.*"]
+exclude = ["tests", "tests.*", "deployment", "deployment.*", "docs", "docs.*"]
+namespaces = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+norecursedirs = ["Version *", ".git", ".venv", "venv", "env", "build", "dist", "old_project_structure", "comperss"]

@@ -1,5 +1,0 @@
-MetaTrader5
-numpy==1.26.4
-Pillow
-pyinstaller
-pytest

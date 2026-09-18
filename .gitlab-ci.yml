@@ -1,0 +1,140 @@
+# GitLab is the source of truth. Runner registration is still pending.
+# Both tag defaults below are placeholders, not verified runner capabilities.
+stages:
+  - validate
+  - test
+  - build
+  - smoke
+  - package
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH =~ /^(develop|staging|main)$/ && $CI_PIPELINE_SOURCE == "push"'
+    - when: never
+
+variables:
+  WINDOWS_RUNNER_TAG: 'windows-self-hosted'
+  MT5_SMOKE_RUNNER_TAG: 'windows-self-hosted-no-mt5'
+  MT5_TERMINAL_UNAVAILABLE_CONFIRMED: 'false'
+  PYTHON_EXECUTABLE: 'python'
+  ARTIFACT_NAME: 'MT5Agent-v0.1.0'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+  PIP_NO_INPUT: '1'
+  GIT_DEPTH: '1'
+  GIT_SUBMODULE_STRATEGY: 'none'
+
+default:
+  tags:
+    - '$WINDOWS_RUNNER_TAG'
+  interruptible: true
+  timeout: 15 minutes
+
+# Register a Windows x64 shell executor with shell=pwsh. Jobs run at repo root.
+.python-job:
+  timeout: 15 minutes
+  before_script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      & $env:PYTHON_EXECUTABLE --version
+      if ($LASTEXITCODE -ne 0) { throw 'Python is unavailable' }
+      & $env:PYTHON_EXECUTABLE -m pip install --prefer-binary -r requirements.txt
+      if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
+      & $env:PYTHON_EXECUTABLE -m pip check
+      if ($LASTEXITCODE -ne 0) { throw 'Dependency consistency check failed' }
+
+validate:windows:
+  extends: .python-job
+  stage: validate
+  script:
+    - '& ./deployment/ci.ps1 -Task validate -PythonExecutable $env:PYTHON_EXECUTABLE'
+
+test:windows:
+  extends: .python-job
+  stage: test
+  needs:
+    - job: validate:windows
+      artifacts: false
+  script:
+    - '& ./deployment/ci.ps1 -Task test -PythonExecutable $env:PYTHON_EXECUTABLE'
+  artifacts:
+    when: always
+    expire_in: 14 days
+    reports:
+      junit: reports/pytest.xml
+    paths:
+      - reports/pytest.xml
+
+build:windows:
+  extends: .python-job
+  stage: build
+  timeout: 20 minutes
+  needs:
+    - job: test:windows
+      artifacts: false
+  script:
+    - '& ./deployment/ci.ps1 -Task build -PythonExecutable $env:PYTHON_EXECUTABLE -ArtifactName $env:ARTIFACT_NAME'
+  artifacts:
+    expire_in: 14 days
+    paths:
+      - dist/$ARTIFACT_NAME.exe
+
+smoke:invalid-configuration:
+  stage: smoke
+  timeout: 5 minutes
+  needs:
+    - job: build:windows
+      artifacts: true
+  script:
+    - '& ./deployment/ci.ps1 -Task smoke-invalid -ArtifactName $env:ARTIFACT_NAME'
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - dist/$ARTIFACT_NAME.exe
+      - reports/invalid-configuration.*
+
+# Blocking manual gate: no suitable isolated VM is currently available.
+# Set the confirmed VM tag and MT5_TERMINAL_UNAVAILABLE_CONFIRMED=true only
+# after provisioning it. This is not an optional or silently skipped smoke test.
+smoke:terminal-unavailable:
+  stage: smoke
+  timeout: 5 minutes
+  tags:
+    - '$MT5_SMOKE_RUNNER_TAG'
+  variables:
+    MT5_TERMINAL_UNAVAILABLE_CONFIRMED: 'true'
+  needs:
+    - job: smoke:invalid-configuration
+      artifacts: true
+  when: manual
+  allow_failure: false
+  script:
+    - '& ./deployment/ci.ps1 -Task smoke-unavailable -ArtifactName $env:ARTIFACT_NAME'
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - dist/$ARTIFACT_NAME.exe
+      - reports/invalid-configuration.*
+      - reports/terminal-unavailable.*
+
+package:windows:
+  stage: package
+  timeout: 5 minutes
+  needs:
+    - job: smoke:terminal-unavailable
+      artifacts: true
+  script:
+    - '& ./deployment/ci.ps1 -Task package -ArtifactName $env:ARTIFACT_NAME'
+  artifacts:
+    name: '$ARTIFACT_NAME-$CI_COMMIT_SHORT_SHA'
+    expire_in: 30 days
+    paths:
+      - dist/$ARTIFACT_NAME.exe
+      - sha256.txt
+      - reports/invalid-configuration.json
+      - reports/terminal-unavailable.json
