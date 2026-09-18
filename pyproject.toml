@@ -10,8 +10,7 @@ requires-python = ">=3.10"
 dynamic = ["version", "dependencies"]
 
 [tool.setuptools.dynamic]
-# Preserve existing package metadata. Its mismatch with the development label is
-# tracked in docs/KNOWN_ISSUES.md; a layout migration must not silently fix it.
+# Package, default runtime identity and executable use this version authority.
 version = {attr = "agent.__version__"}
 dependencies = {file = ["requirements.txt"]}
 

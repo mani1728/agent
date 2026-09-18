@@ -13,7 +13,7 @@ def build_dispatcher(
     dispatcher = CommandDispatcher()
 
     def status_handler(command: Command):
-        return {"state": agent.state.value, "version": agent.config.version, "app_name": agent.config.app_name}
+        return {"state": agent.state.value, "version": agent.identity.version, "app_name": agent.identity.app_name}
 
     def health_handler(command: Command):
         health = agent.health()

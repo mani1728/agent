@@ -1,4 +1,4 @@
-# Architecture — v0.1.0
+# Architecture — v0.1.1 development
 
 ## Agent Capability Discovery & Runtime Introspection Foundation
 
@@ -39,7 +39,7 @@ Discovered
 ## Isolation invariants
 
 - Core and Contracts do not import HTTP implementation, persistence, external APIs, or MetaTrader5 infrastructure.
-- Capability registry remains in-memory for v0.1.0.
+- Capability registry remains in-memory.
 - No second command transport is introduced.
 - Existing ApplicationBoundary and Dispatcher flow remain unchanged.
 

@@ -1,58 +1,67 @@
 # GitLab CI and local validation
 
-GitLab (`origin`) is the source of truth. GitHub (`github`) is a downstream
-mirror. This configuration creates CI artifacts only: it does not push, merge,
-deploy, create tags, publish releases, or configure mirroring.
+GitLab (`origin`) is the source of truth. GitHub is a push mirror/archive only;
+the obsolete Actions workflow is retired. CI produces candidate artifacts, not
+merges, tags or releases. v0.1.0 remains immutable.
 
-## Infrastructure status
+## Runner and safety settings
 
-No GitLab Windows runner is registered yet, and no isolated unavailable-MT5 VM
-is available. The following values are placeholders, not verified capabilities:
+The local Windows runner is registered with `pwsh` and the tags below. A tag is
+a scheduling constraint, not a substitute for verifying the machine state.
 
-| Variable | Placeholder | Required setup |
+| Variable | Default | Meaning |
 | --- | --- | --- |
-| `WINDOWS_RUNNER_TAG` | `windows-self-hosted` | Local Windows x64 runner, shell executor with `shell = "pwsh"` |
-| `MT5_SMOKE_RUNNER_TAG` | `windows-self-hosted-no-mt5` | Isolated Windows VM without an accessible MT5 terminal |
-| `PYTHON_EXECUTABLE` | `python` | Runner-installed interpreter compatible with unchanged requirements.txt |
-| `MT5_TERMINAL_UNAVAILABLE_CONFIRMED` | `false` | Set to `true` only after verifying that isolated VM |
+| `WINDOWS_RUNNER_TAG` | `windows-self-hosted` | Local Windows x64 shell runner |
+| `MT5_SMOKE_RUNNER_TAG` | `windows-self-hosted-no-mt5` | Local isolated no-MT5 runner |
+| `PYTHON_EXECUTABLE` | `python` | Machine-installed compatible Python, or its absolute path |
+| `MT5_TERMINAL_UNAVAILABLE_CONFIRMED` | `false` | Explicit operator confirmation for the manual smoke job only |
 
-Override these variables in GitLab with the actual registered runner tags.
-Prepare a compatible Python environment; the repository's pre-existing local
-Python 3.14 environment has NumPy 2.5.3, whereas requirements.txt pins 1.26.4.
-Do not treat a test pass in that environment as dependency reproducibility.
+Use Python 3.11 x64 with requirements.txt (including NumPy 1.26.4). Do not use
+Python 3.14/NumPy 2.x as evidence of requirements reproducibility. Python jobs
+install requirements and run `pip check`; no hosted runner or setup-python is used.
+
+For `smoke:terminal-unavailable`, open the manual job form and provide
+`MT5_TERMINAL_UNAVAILABLE_CONFIRMED=true` only after verifying that its selected
+runner has no accessible MT5 installation, including portable terminals.
+Do not set confirmation globally or infer it from the runner tag. The helper
+also refuses to proceed while terminal/terminal64 is running; absence of a
+process alone does not prove isolation. Do not stop or rename a user's terminal
+to make this test pass. The job remains manual and blocking (`allow_failure: false`).
 
 ## Pipeline and evidence
 
 ```text
-validate:windows
-  -> test:windows
-  -> build:windows
-  -> smoke:invalid-configuration
-  -> smoke:terminal-unavailable (manual, blocking)
-  -> package:windows
+validate -> test -> build -> smoke-invalid -> smoke-unavailable (manual) -> package
 ```
 
-Stages are `validate`, `test`, `build`, `smoke`, `package`. Merge-request
-pipelines, pushes to develop/staging/main, and manual branch pipelines are
-supported. A branch push with an open MR is suppressed to avoid duplicate
-push/MR pipelines. Tag/release pipelines are not enabled.
+Workflow rules allow stable semantic-version tags such as `v0.1.1` and `v0.2.0`,
+pushes to develop/staging/main, merge requests and manual branch pipelines.
+An open MR suppresses duplicate branch push pipelines. Leading-zero versions,
+prerelease tags and non-version tags are excluded. The tag rule precedes branch
+rules because tag pipelines have `CI_COMMIT_TAG` rather than `CI_COMMIT_BRANCH`.
+See [GitLab workflow rules](https://docs.gitlab.com/ci/yaml/workflow/).
 
-All jobs use local Windows runners. Each Python job checks installation of the
-unchanged requirements and dependency consistency. Native command exit codes
-are checked explicitly. Test results are uploaded as JUnit reports.
+Every job reads `agent/__init__.py` as the version authority and checks HEAD
+against `CI_COMMIT_SHA`. Tag builds require `CI_COMMIT_TAG == v<source version>`;
+for a future v0.2.0, update source metadata before tagging. Jobs use the runner's
+checkout of the pipeline commit; no script checks out a moving branch.
 
-The build job uploads the executable. Each smoke job downloads its predecessor's
-artifact, runs that exact file with a 60-second bound, and records the exit code
-and SHA-256. The final job verifies both receipts against the current binary,
-generates sha256.txt, and uploads the same executable without rebuilding it.
-Successful build alone cannot reach the final package artifact.
+The PyInstaller recipe derives `MT5Agent-v<version>.exe` from that same metadata.
+The build receipt records version, executable name, SHA256, source commit and
+pipeline ID. Each smoke job downloads its predecessor's binary and evidence,
+checks that build receipt, runs the file with a 60-second limit, and records
+expected/actual exit codes, SHA256 and commit/pipeline identity. Packaging
+requires both matching smoke receipts and the build receipt. It writes
+sha256.txt and uploads that exact executable without rebuilding.
 
-The unavailable-terminal smoke is deliberately manual with `allow_failure:
-false`. It must remain pending until suitable infrastructure exists. Do not set
-the confirmation variable on an ordinary workstation, stop a user's terminal,
-or accept an arbitrary startup failure as evidence of an unavailable terminal.
+A tag pipeline therefore still requires explicit manual no-MT5 confirmation;
+creating a tag does not bypass validation or publish a release. Existing tags
+retain their original workflow; this change applies to future tagged commits.
 
-## Local commands (from repository root)
+## Local validation
+
+From the repository root, activate a compatible environment or pass an absolute
+`-PythonExecutable` path:
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -62,28 +71,28 @@ python -m pip install -r requirements.txt
 ./deployment/ci.ps1 -Task smoke-invalid
 ```
 
-Pass `-PythonExecutable 'C:\path\to\python.exe'` when Python is not on PATH.
-The script restores environment variables used for the invalid-config smoke.
-Run `smoke-unavailable` only on the confirmed isolated VM. `package` requires
-both real smoke receipts and refuses to generate a final package without them.
+Commit the candidate before its final evidence build so build.json identifies
+the candidate commit. The helper restores temporary HTTP configuration values.
+The optional `-ArtifactName` parameter must agree with the canonical version.
+Direct PyInstaller builds work but do not create the evidence needed to package.
 
-## Lint and infrastructure acceptance
+Only on a confirmed isolated no-MT5 machine:
 
-Use the installed GitLab's CI Lint endpoint with the proposed YAML content:
-`POST /api/v4/projects/root%2Fagent/ci/lint` and `dry_run: false`.
-This validates configuration without creating a pipeline. If authentication is
-unavailable, record that limitation and perform local YAML/schema, PowerShell
-syntax, dependency-graph and artifact-path checks. Local checks do not prove
-runner scheduling, artifact upload, or a successful GitLab pipeline.
+```powershell
+$env:MT5_TERMINAL_UNAVAILABLE_CONFIRMED = 'true'
+./deployment/ci.ps1 -Task smoke-unavailable
+./deployment/ci.ps1 -Task package
+```
 
-References: [GitLab CI Lint API](https://docs.gitlab.com/api/lint/),
-[CI YAML](https://docs.gitlab.com/ci/yaml/),
-[Runner shells](https://docs.gitlab.com/runner/shells/).
+On an ordinary workstation, skip unavailable-terminal smoke and report it as
+unvalidated. You may manually test the built EXE, but it is not a final package.
+An independently computed test-binary SHA256 is not a substitute for smoke receipts.
 
-## Retained GitHub workflow
+## Configuration validation
 
-`.github/workflows/ci.yml` remains with its original operational content and a
-legacy comment. It references the old version directory and is usable only on
-historical refs that contain that directory. It is not a working fallback for
-the migrated root tree. Its retirement is deferred until GitLab CI has actually
-passed. No direct GitHub changes are part of this migration.
+Use the installed GitLab CI Lint endpoint with proposed YAML and `dry_run: false`
+without creating a tag: `POST /api/v4/projects/root%2Fagent/ci/lint`.
+If authentication is unavailable, record that limitation and run local YAML,
+PowerShell syntax, dependency graph and artifact/evidence checks. Local checks
+cannot prove runner scheduling or artifact uploads. See the
+[CI Lint API](https://docs.gitlab.com/api/lint/).
