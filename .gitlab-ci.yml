@@ -105,6 +105,8 @@ smoke:terminal-unavailable:
   timeout: 5 minutes
   tags:
     - '$MT5_SMOKE_RUNNER_TAG'
+  variables:
+    MT5_TERMINAL_UNAVAILABLE_CONFIRMED: 'true'
   needs:
     - job: smoke:invalid-configuration
       artifacts: true
