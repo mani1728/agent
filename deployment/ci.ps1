@@ -100,13 +100,19 @@ try {
             if ($env:MT5_TERMINAL_UNAVAILABLE_CONFIRMED -ne 'true') {
                 throw 'Use an isolated VM with no accessible MT5 terminal, then explicitly set MT5_TERMINAL_UNAVAILABLE_CONFIRMED=true'
             }
+
             $names = @('MT5_AGENT_HTTP_HOST', 'MT5_AGENT_HTTP_PORT', 'MT5_AGENT_HTTP_MAX_REQUEST_BYTES')
             $previousValues = @{}
+
             try {
                 foreach ($name in $names) {
                     $previousValues[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-                    [Environment]::SetEnvironmentVariable($name, $null, 'Process')
                 }
+
+                $env:MT5_AGENT_HTTP_HOST = '127.0.0.1'
+                $env:MT5_AGENT_HTTP_PORT = '18080'
+                $env:MT5_AGENT_HTTP_MAX_REQUEST_BYTES = '1048576'
+
                 Invoke-Smoke -Name 'terminal-unavailable' -ExpectedExit 1 -ExpectedErrorPattern '\(agent_start_failed\)'
             }
             finally {
