@@ -1,25 +1,17 @@
-# Known issues outside the structural migration
+# Known issues and maintenance status
 
-These are existing issues, not fixes included in the stage-1 layout migration.
+## Resolved in v0.1.1 development
+
+- **KI-001:** `agent.get_status` now reads `agent.identity.version` and
+  `agent.identity.app_name`. Regression tests cover the real dispatcher and
+  composed HTTP path without adding a compatibility `config` attribute.
+- **KI-002:** `agent.__version__` is the authority for package metadata,
+  default runtime identity and executable naming. CI rejects mismatching tags.
+
+## Remaining historical issues
+
 Historical paths below refer to baseline
 `1a133e6c6ea1b02a039f45610182037d347390ba` and remain accessible with `git show`.
-
-## KI-001: status handler uses a removed attribute
-
-`agent/application/app.py` reads `agent.config.version` and
-`agent.config.app_name` for `agent.get_status`. The active `Agent` exposes
-`identity`, not `config`. The dispatcher contains the resulting exception and
-returns `execution_failed`. Resolve and test this in a separate behavioral fix.
-
-## KI-002: version metadata is inconsistent
-
-- `agent/__init__.py`: `__version__ = "0.0.6"`.
-- `agent/contracts/models.py`: `AgentIdentity.version = "0.0.8"`.
-- Development README label and executable filename: v0.1.0.
-- The new pyproject reads the existing package version without changing it.
-
-Choose and test a single version authority separately. Stage 1 neither changes
-runtime identity nor creates a v0.1.0 tag or release.
 
 ## KI-003: historical Worker is syntactically incomplete
 
@@ -54,7 +46,7 @@ an unchecked template, not a retroactive modification of release evidence.
 
 ## KI-007: older regression suites are not part of the current suite
 
-Stage 1 preserves the six active test files byte-for-byte. Historical tests
+The migration preserved six active test files; v0.1.1 adds targeted regressions. Historical tests
 `test_agent.py` (latest at `Version 0_0_2/tests/`) and `test_commands.py`,
 `test_dispatcher.py`, `test_security_observability.py`, `test_transport.py`
 (latest at `Version 0_0_5/tests/`) remain recoverable from the baseline.

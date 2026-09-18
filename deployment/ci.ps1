@@ -1,14 +1,33 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('validate', 'test', 'build', 'smoke-invalid', 'smoke-unavailable', 'package')]
+    [ValidateSet('metadata', 'validate', 'test', 'build', 'smoke-invalid', 'smoke-unavailable', 'package')]
     [string]$Task,
     [string]$PythonExecutable = 'python',
-    [string]$ArtifactName = 'MT5Agent-v0.1.0'
+    [string]$ArtifactName = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$versionSource = Get-Content -LiteralPath (Join-Path $repoRoot 'agent/__init__.py') -Raw
+$versionMatch = [regex]::Match($versionSource, '(?m)^__version__ = "((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"\r?$')
+if (-not $versionMatch.Success) { throw 'Missing stable semantic version in agent/__init__.py' }
+$version = $versionMatch.Groups[1].Value
+$expectedArtifactName = "MT5Agent-v$version"
+if ($ArtifactName -and $ArtifactName -ne $expectedArtifactName) {
+    throw "ArtifactName must match the source version: $expectedArtifactName"
+}
+$ArtifactName = $expectedArtifactName
+$env:ARTIFACT_NAME = $ArtifactName
+if ($env:CI_COMMIT_TAG -and $env:CI_COMMIT_TAG -cne "v$version") {
+    throw "Tag $env:CI_COMMIT_TAG does not match source version v$version"
+}
+$sourceCommit = (& git -C $repoRoot rev-parse HEAD)
+if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source commit' }
+if ($env:CI_COMMIT_SHA -and $env:CI_COMMIT_SHA -ne $sourceCommit) {
+    throw 'Checkout HEAD does not match CI_COMMIT_SHA'
+}
+$pipelineId = [string]$env:CI_PIPELINE_ID
 $exePath = Join-Path $repoRoot "dist\$ArtifactName.exe"
 $reportRoot = Join-Path $repoRoot 'reports'
 
@@ -27,8 +46,21 @@ function Get-BinaryHash {
     return (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Assert-BuildEvidence {
+    $build = Get-Content -LiteralPath (Join-Path $reportRoot 'build.json') -Raw | ConvertFrom-Json
+    if ($build.executable -ne "$ArtifactName.exe" -or $build.version -ne $version -or
+        $build.sha256 -ne (Get-BinaryHash) -or $build.source_commit -ne $sourceCommit -or
+        $build.pipeline_id -ne $pipelineId) {
+        throw 'Missing or mismatched build evidence for this commit/pipeline'
+    }
+}
+
 function Invoke-Smoke {
     param([string]$Name, [int]$ExpectedExit, [string]$ExpectedErrorPattern)
+    Assert-BuildEvidence
+    # A failed rerun must not leave a prior successful receipt behind.
+    $receiptPath = Join-Path $reportRoot "$Name.json"
+    if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath }
     $beforeHash = Get-BinaryHash
     $stdout = Join-Path $reportRoot "$Name.stdout.log"
     $stderr = Join-Path $reportRoot "$Name.stderr.log"
@@ -56,6 +88,8 @@ function Invoke-Smoke {
             test = $Name
             executable = "$ArtifactName.exe"
             sha256 = $beforeHash
+            source_commit = $sourceCommit
+            pipeline_id = $pipelineId
             expected_exit = $ExpectedExit
             actual_exit = $actualExit
         } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $reportRoot "$Name.json") -Encoding utf8
@@ -70,6 +104,9 @@ Push-Location $repoRoot
 try {
     New-Item -ItemType Directory -Path $reportRoot -Force | Out-Null
     switch ($Task) {
+        'metadata' {
+            Write-Output "Source $sourceCommit; version $version; executable $ArtifactName.exe"
+        }
         'validate' {
             $historical = @(Get-ChildItem -LiteralPath $repoRoot -Directory | Where-Object { $_.Name -like 'Version *' })
             if ($historical.Count -gt 0) {
@@ -82,8 +119,21 @@ try {
             Invoke-Python -Arguments @('-m', 'pytest', '-q', '--durations=20', '--junitxml=reports/pytest.xml')
         }
         'build' {
+            # Prevent stale executables/evidence from being uploaded after a failed build.
+            if (Test-Path -LiteralPath $exePath) { Remove-Item -LiteralPath $exePath }
+            foreach ($name in @('build', 'invalid-configuration', 'terminal-unavailable')) {
+                $receiptPath = Join-Path $reportRoot "$name.json"
+                if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath }
+            }
             Invoke-Python -Arguments @('deployment/make_icon.py')
             Invoke-Python -Arguments @('-m', 'PyInstaller', 'deployment/Agent.spec', '--clean', '--noconfirm')
+            [ordered]@{
+                executable = "$ArtifactName.exe"
+                version = $version
+                sha256 = Get-BinaryHash
+                source_commit = $sourceCommit
+                pipeline_id = $pipelineId
+            } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $reportRoot 'build.json') -Encoding utf8
             Write-Output "Built $exePath; SHA256=$(Get-BinaryHash)"
         }
         'smoke-invalid' {
@@ -97,8 +147,13 @@ try {
             }
         }
         'smoke-unavailable' {
+            $receiptPath = Join-Path $reportRoot 'terminal-unavailable.json'
+            if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath }
             if ($env:MT5_TERMINAL_UNAVAILABLE_CONFIRMED -ne 'true') {
                 throw 'Use an isolated VM with no accessible MT5 terminal, then explicitly set MT5_TERMINAL_UNAVAILABLE_CONFIRMED=true'
+            }
+            if (Get-Process -Name terminal,terminal64 -ErrorAction SilentlyContinue) {
+                throw 'An MT5 terminal is running; refuse terminal-unavailable smoke'
             }
 
             $names = @('MT5_AGENT_HTTP_HOST', 'MT5_AGENT_HTTP_PORT', 'MT5_AGENT_HTTP_MAX_REQUEST_BYTES')
@@ -122,12 +177,16 @@ try {
             }
         }
         'package' {
+            $checksumPath = Join-Path $repoRoot 'sha256.txt'
+            if (Test-Path -LiteralPath $checksumPath) { Remove-Item -LiteralPath $checksumPath }
+            Assert-BuildEvidence
             $binaryHash = Get-BinaryHash
             $checks = @{'invalid-configuration' = 2; 'terminal-unavailable' = 1}
             foreach ($name in $checks.Keys) {
                 $receipt = Get-Content -LiteralPath (Join-Path $reportRoot "$name.json") -Raw | ConvertFrom-Json
                 if ($receipt.test -ne $name -or $receipt.executable -ne "$ArtifactName.exe" -or
                     $receipt.sha256 -ne $binaryHash -or $receipt.expected_exit -ne $checks[$name] -or
+                    $receipt.source_commit -ne $sourceCommit -or $receipt.pipeline_id -ne $pipelineId -or
                     $receipt.actual_exit -ne $checks[$name]) {
                     throw "Missing or mismatched smoke evidence for $name"
                 }

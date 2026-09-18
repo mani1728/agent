@@ -6,10 +6,37 @@ verification statements below describe those records, not fresh validation of
 old binaries. Release assets and publication dates have not been independently
 revalidated here, so no publication dates are inferred from commit timestamps.
 
-## [Unreleased]
+## [Unreleased] — v0.1.1 development
 
-Development line: v0.1.0, based on the documented v0.0.9 baseline. No v0.1.0
-tag or release is created by this migration.
+### Fixed
+
+- `agent.get_status` reads the active AgentIdentity, preserving response fields
+  and command/correlation IDs; regression coverage includes lifecycle states,
+  custom identities and the composed HTTP path.
+- Package version, default runtime identity and executable naming share
+  `agent.__version__ = "0.1.1"`; the candidate is `MT5Agent-v0.1.1.exe`.
+- PyInstaller uses its NumPy hook instead of hard-coded NumPy 2.x private
+  imports, supporting the pinned NumPy 1.26.4 environment.
+
+### Changed
+
+- GitLab accepts stable `vMAJOR.MINOR.PATCH` tag pipelines alongside existing
+  branch/MR pipelines and validates source version and checkout commit.
+- Build and smoke evidence includes commit/pipeline identity and SHA256;
+  packaging rejects mismatches and retains the smoke-tested binary unchanged.
+- Terminal-unavailable smoke requires explicit confirmation at manual-job
+  launch rather than hard-coding approval in YAML; running terminals are rejected.
+- Retired the obsolete GitHub Actions workflow and refreshed canonical runtime,
+  CI and release-checklist documentation. Generated outputs remain ignored.
+
+No v0.1.1 promotion, tag or release is part of this maintenance work.
+
+## [0.1.0] — Capability discovery and canonical GitLab delivery
+
+Released at `8fa282b55b726389e7ea2e36708b5b87864c7a60` (tag `v0.1.0`).
+GitLab Release and Windows validate/test/build/smoke/package acceptance were
+confirmed by the maintainer. Historical tag and release assets remain immutable.
+The changes below record the work included in that release.
 
 ### Added
 
@@ -21,8 +48,7 @@ tag or release is created by this migration.
 - Root console wrapper and pyproject configuration for the canonical package
   and root-only test collection.
 - GitLab validate/test/build/smoke/package pipeline and shared PowerShell helper.
-  Runner registration and isolated unavailable-terminal validation are pending;
-  this is not a claim of a successful GitLab pipeline or completed release.
+  The local Windows runner and both smoke paths passed before release.
 
 ### Changed
 
@@ -31,7 +57,7 @@ tag or release is created by this migration.
 - Historical version directories leave the active tree; their commits/tags
   remain unchanged. `Version 1_0_0` is not merged into the active runtime.
 - GitLab is the development source of truth; GitHub remains downstream only.
-  The legacy GitHub workflow is retained pending actual GitLab CI acceptance.
+  The legacy GitHub workflow was retained at this release snapshot.
 - Release history is consolidated here and the deployment checklist becomes a
   fresh unchecked template.
 
@@ -45,9 +71,8 @@ tag or release is created by this migration.
 ### Known limitations
 
 Status-handler config/identity mismatch and inconsistent package/runtime/version
-labels are deliberately unchanged. See [known issues](docs/KNOWN_ISSUES.md).
-The structural migration is unreleased; infrastructure acceptance remains a
-separate gate even when available local validation passes.
+labels remained in v0.1.0 and are addressed in the v0.1.1 development section.
+See [known issues](docs/KNOWN_ISSUES.md) for historical limitations.
 
 ## [0.0.9] — Operational Lifecycle Observability Foundation
 

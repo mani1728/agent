@@ -10,7 +10,7 @@ GET_RUNTIME_INFO = "agent.get_runtime_info"
 def build_capability_handlers(
     capability_provider: Any,
 ) -> dict[str, Any]:
-    """Build v0.1.0 capability discovery command handlers."""
+    """Build capability discovery command handlers."""
 
     def get_capabilities(_command: Any) -> Any:
         return {

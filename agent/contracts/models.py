@@ -3,6 +3,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from agent import __version__
+
 
 class LifecycleState(str, Enum):
     CREATED = "created"
@@ -30,7 +32,7 @@ class HealthStatus:
 @dataclass(frozen=True)
 class AgentIdentity:
     app_name: str = "Trading Agent"
-    version: str = "0.0.8"
+    version: str = __version__
 
 
 @dataclass(frozen=True)

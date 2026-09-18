@@ -1,8 +1,9 @@
-# MT5 Agent — v0.1.0 development
+# MT5 Agent — v0.1.1 development
 
 The active agent provides MT5 lifecycle management, an HTTP/JSON command
-boundary, capability discovery and runtime introspection. v0.1.0 is unreleased;
-see [CHANGELOG.md](CHANGELOG.md) for historical releases and current work.
+boundary, capability discovery and runtime introspection. v0.1.0 is released;
+v0.1.1 is the current maintenance candidate awaiting manual acceptance.
+See [CHANGELOG.md](CHANGELOG.md) for released and unreleased changes.
 
 GitLab (`origin`) is the source of truth. GitHub is a downstream mirror.
 Development flows through `develop`, `staging`, then `main` after review.
@@ -30,8 +31,8 @@ foundation boundary, not a production IAM or TLS/mTLS deployment.
 
 Commands include health, status, `agent.get_capabilities` and
 `agent.get_runtime_info`. The default capability registry is empty and runtime
-information reflects the active identity/lifecycle. The existing status handler
-has a config/identity defect; see [known issues](docs/KNOWN_ISSUES.md).
+information and `agent.get_status` reflect the active identity/lifecycle.
+See [known issues](docs/KNOWN_ISSUES.md) for remaining limitations.
 
 This active runtime does not include trading/order execution, Kafka, Gateway,
 SQLite persistence, retry/circuit-breaker infrastructure, Windows Service hosting
@@ -60,10 +61,10 @@ files through commits/tags; the exact move map is in [docs/MIGRATION.md](docs/MI
 ## Setup and execution
 
 Use Windows x64 with a Python interpreter compatible with requirements.txt and
-MetaTrader5. Keep the existing NumPy 1.26.4 constraint; the pre-existing local
-Python 3.14/NumPy 2.5 environment is not an exact requirements installation.
-The package version, AgentIdentity version and executable name are currently
-inconsistent and intentionally unchanged by the layout migration.
+MetaTrader5. Python 3.11 x64 supports the pinned NumPy 1.26.4 requirement.
+Use a dedicated environment; Python 3.14/NumPy 2.x is not an exact requirements
+installation. `agent/__init__.py` is the version authority for package metadata,
+default AgentIdentity and executable naming. Custom identities remain supported.
 
 From the repository root, using a compatible Python installation:
 
@@ -101,13 +102,14 @@ Run from repository root:
 
 ```powershell
 python -m pytest -q
-python deployment/make_icon.py
-python -m PyInstaller deployment/Agent.spec --clean --noconfirm
+./deployment/ci.ps1 -Task validate
+./deployment/ci.ps1 -Task build
+./deployment/ci.ps1 -Task smoke-invalid
 ```
 
-Pytest collects `tests/` only by default. The active test files and source package
-were preserved from the development baseline. Generated icon, reports, build/
-and dist/ are ignored. The executable remains `dist/MT5Agent-v0.1.0.exe`.
+Pytest collects `tests/` only by default. Generated icon, reports, build/
+and dist/ are ignored. The test executable is `dist/MT5Agent-v0.1.1.exe`.
+It is a maintenance candidate, not a published release.
 
 Use [deployment/ci.ps1](deployment/ci.ps1) for the same validation and smoke
 commands as CI. See [docs/CI.md](docs/CI.md) for environment prerequisites,
@@ -115,19 +117,20 @@ artifact handoff and checksum verification.
 
 ## CI status
 
-The GitLab configuration defines validate, test, build, smoke and package stages
-on local Windows runners. Registration is pending. `windows-self-hosted` and
-`windows-self-hosted-no-mt5` are configurable placeholder tags, not registered
-runners. No isolated unavailable-terminal VM is currently available.
+The GitLab configuration runs validate, test, build, smoke and package stages
+on registered local Windows runners using `pwsh`. Runner tags are
+`windows-self-hosted` and `windows-self-hosted-no-mt5`. Branch pipelines and
+stable semantic-version tags (`v0.1.1`, `v0.2.0`) use the same validation chain.
+Tag pipelines reject a tag that disagrees with the source version.
 
-Invalid-configuration smoke is automatic. Unavailable-terminal smoke is a
-blocking manual job requiring a confirmed isolated VM. Final packaging requires
-both smoke receipts for the exact same binary. The configuration is not evidence
-of a completed GitLab pipeline.
+Invalid-configuration smoke is automatic. Terminal-unavailable smoke remains a
+blocking manual job: explicitly confirm isolation when launching that job.
+Final packaging requires both smoke receipts and build evidence for the same
+binary, commit and pipeline; it never rebuilds. A no-MT5 runner tag alone does
+not establish that no terminal is accessible. See [CI instructions](docs/CI.md).
 
-The legacy GitHub workflow is retained until GitLab CI is operational. It still
-uses historical paths and can run only against a pre-migration ref containing
-them; it is not a working fallback for this canonical tree.
+GitLab produced and validated v0.1.0. The obsolete GitHub Actions workflow has
+been retired; GitHub is a push mirror/archive only.
 
 ## Documentation
 
