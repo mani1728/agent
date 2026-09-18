@@ -1,3 +1,7 @@
+# LEGACY: retained until the GitLab pipeline has passed on registered runners.
+# This workflow describes the pre-migration layout and only runs against a
+# historical ref that still contains Version 0_0_9 (for example 1a133e6).
+# It is not a working fallback for the canonical root tree. See docs/CI.md.
 name: MT5 Agent CI
 
 on:
