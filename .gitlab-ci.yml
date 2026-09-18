@@ -1,5 +1,4 @@
-# GitLab is the source of truth. Runner registration is still pending.
-# Both tag defaults below are placeholders, not verified runner capabilities.
+# GitLab is the source of truth; all jobs use local Windows shell runners.
 stages:
   - validate
   - test
@@ -9,6 +8,7 @@ stages:
 
 workflow:
   rules:
+    - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"'
@@ -21,7 +21,6 @@ variables:
   MT5_SMOKE_RUNNER_TAG: 'windows-self-hosted-no-mt5'
   MT5_TERMINAL_UNAVAILABLE_CONFIRMED: 'false'
   PYTHON_EXECUTABLE: 'python'
-  ARTIFACT_NAME: 'MT5Agent-v0.1.0'
   PIP_DISABLE_PIP_VERSION_CHECK: '1'
   PIP_NO_INPUT: '1'
   GIT_DEPTH: '1'
@@ -32,6 +31,8 @@ default:
     - '$WINDOWS_RUNNER_TAG'
   interruptible: true
   timeout: 15 minutes
+  before_script:
+    - '& ./deployment/ci.ps1 -Task metadata'
 
 # Register a Windows x64 shell executor with shell=pwsh. Jobs run at repo root.
 .python-job:
@@ -39,6 +40,7 @@ default:
   before_script:
     - |
       $ErrorActionPreference = 'Stop'
+      & ./deployment/ci.ps1 -Task metadata
       & $env:PYTHON_EXECUTABLE --version
       if ($LASTEXITCODE -ne 0) { throw 'Python is unavailable' }
       & $env:PYTHON_EXECUTABLE -m pip install --prefer-binary -r requirements.txt
@@ -80,7 +82,8 @@ build:windows:
   artifacts:
     expire_in: 14 days
     paths:
-      - dist/$ARTIFACT_NAME.exe
+      - dist/MT5Agent-v*.exe
+      - reports/build.json
 
 smoke:invalid-configuration:
   stage: smoke
@@ -94,19 +97,18 @@ smoke:invalid-configuration:
     when: always
     expire_in: 14 days
     paths:
-      - dist/$ARTIFACT_NAME.exe
+      - dist/MT5Agent-v*.exe
+      - reports/build.json
       - reports/invalid-configuration.*
 
-# Blocking manual gate: no suitable isolated VM is currently available.
-# Set the confirmed VM tag and MT5_TERMINAL_UNAVAILABLE_CONFIRMED=true only
-# after provisioning it. This is not an optional or silently skipped smoke test.
+# Blocking manual gate on the registered no-MT5 runner. At job launch, explicitly
+# set MT5_TERMINAL_UNAVAILABLE_CONFIRMED=true after verifying terminal isolation.
+# A runner tag alone is not confirmation. Never set this globally for all jobs.
 smoke:terminal-unavailable:
   stage: smoke
   timeout: 5 minutes
   tags:
     - '$MT5_SMOKE_RUNNER_TAG'
-  variables:
-    MT5_TERMINAL_UNAVAILABLE_CONFIRMED: 'true'
   needs:
     - job: smoke:invalid-configuration
       artifacts: true
@@ -118,7 +120,8 @@ smoke:terminal-unavailable:
     when: always
     expire_in: 14 days
     paths:
-      - dist/$ARTIFACT_NAME.exe
+      - dist/MT5Agent-v*.exe
+      - reports/build.json
       - reports/invalid-configuration.*
       - reports/terminal-unavailable.*
 
@@ -131,10 +134,11 @@ package:windows:
   script:
     - '& ./deployment/ci.ps1 -Task package -ArtifactName $env:ARTIFACT_NAME'
   artifacts:
-    name: '$ARTIFACT_NAME-$CI_COMMIT_SHORT_SHA'
+    name: 'MT5Agent-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA'
     expire_in: 30 days
     paths:
-      - dist/$ARTIFACT_NAME.exe
+      - dist/MT5Agent-v*.exe
+      - reports/build.json
       - sha256.txt
       - reports/invalid-configuration.json
       - reports/terminal-unavailable.json

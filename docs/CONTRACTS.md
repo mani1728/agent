@@ -1,4 +1,4 @@
-# Contracts — v0.1.0
+# Contracts — v0.1.1 development
 
 ## CapabilityDescriptor
 

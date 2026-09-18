@@ -15,12 +15,12 @@ record of a completed release. Historical release facts are in ../CHANGELOG.md.
 ## Validation
 
 - [ ] GitLab CI Lint accepts .gitlab-ci.yml for the installed GitLab version.
-- [ ] Register local Windows runners and replace the documented placeholder tags.
+- [ ] Verify registered local Windows runner tags and no-MT5 isolation.
 - [ ] Validate active source syntax, imports, and package discovery.
 - [ ] Run pytest from repository root; collection is confined to tests/.
 - [ ] Generate the icon with python deployment/make_icon.py.
 - [ ] Build with python -m PyInstaller deployment/Agent.spec --clean --noconfirm.
-- [ ] Verify dist/MT5Agent-v0.1.0.exe exists (change naming only in a version change).
+- [ ] Verify dist/MT5Agent-v0.1.1.exe exists and matches the canonical source version.
 - [ ] Verify invalid startup configuration exits with code 2.
 - [ ] On an isolated VM without an accessible MT5 terminal, verify exit code 1.
 - [ ] Record manual Windows/MT5 graceful-shutdown acceptance for the candidate.
@@ -35,4 +35,4 @@ record of a completed release. Historical release facts are in ../CHANGELOG.md.
 - [ ] Preserve every existing tag and published release unchanged.
 - [ ] Publish the exact verified binary and checksum, without rebuilding it.
 - [ ] Verify downstream mirroring; do not commit or merge directly on GitHub.
-- [ ] Retire the legacy GitHub workflow only after GitLab CI is proven operational.
+- [ ] Confirm GitHub remains mirror/archive only with no Actions workflow.
