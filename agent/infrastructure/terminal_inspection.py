@@ -79,19 +79,34 @@ def registry_locations():
     return locations
 
 
+def user_profiles():
+    profiles = [Path.home()]
+    users = Path(os.environ.get("SystemDrive", "C:") + os.sep) / "Users"
+    if users.is_dir():
+        profiles.extend(p for p in users.iterdir() if p.name not in ("All Users", "Default User")
+                        and p.is_dir() and not p.is_symlink())
+    return list(dict.fromkeys(profiles))
+
+
+def fixed_drives():
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    mask = kernel32.GetLogicalDrives()
+    return [Path(f"{letter}:/") for i, letter in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            if mask & (1 << i) and kernel32.GetDriveTypeW(f"{letter}:\\") == 3]
+
+
 def default_roots():
     # Search immediate children of installation/portable locations, not entire disks.
     roots = [Path.cwd(), Path(sys.executable).parent]
     for key in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
         if os.environ.get(key):
             roots.append(Path(os.environ[key]))
-    roots += [Path.home() / part for part in ("Desktop", "Downloads", "Documents")]
-    import ctypes
+    # CI services run as SYSTEM; inspect other users' obvious portable locations too.
+    roots += [profile / part for profile in user_profiles()
+              for part in ("Desktop", "Downloads", "Documents", "AppData/Local/Programs")]
     # Avoid probing disconnected network/removable drives (which can block).
-    kernel32 = ctypes.windll.kernel32
-    mask = kernel32.GetLogicalDrives()
-    roots += [Path(f"{letter}:/") for i, letter in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-              if mask & (1 << i) and kernel32.GetDriveTypeW(f"{letter}:\\") == 3]
+    roots += fixed_drives()
     if os.environ.get("LOCALAPPDATA"):
         roots.append(Path(os.environ["LOCALAPPDATA"]) / "Programs")
     return roots
@@ -110,9 +125,12 @@ def inspect_terminal(*, roots=None, registry_reader=registry_locations,
     except Exception:
         errors.append("registry_inspection_failed")
     # MetaQuotes records the installation directory in origin.txt, not account data.
-    appdata = os.environ.get("APPDATA") if roots is None else None
-    if appdata:
-        base = Path(appdata) / "MetaQuotes/Terminal"
+    origin_bases = []
+    if roots is None:
+        origin_bases = [p / "AppData/Roaming/MetaQuotes/Terminal" for p in user_profiles()]
+        if os.environ.get("APPDATA"):
+            origin_bases.append(Path(os.environ["APPDATA"]) / "MetaQuotes/Terminal")
+    for base in dict.fromkeys(origin_bases):
         try:
             if base.is_dir():
                 for origin in base.glob("*/origin.txt"):

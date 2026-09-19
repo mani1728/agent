@@ -283,3 +283,15 @@ def test_malformed_process_inventory_is_unknown(monkeypatch):
     monkeypatch.setattr('subprocess.run', lambda *a, **k: SimpleNamespace(stdout='unavailable'))
     with pytest.raises(ValueError):
         process_running()
+
+
+def test_service_account_inspects_other_users_portable_locations(tmp_path, monkeypatch):
+    from agent.infrastructure.terminal_inspection import default_roots, user_profiles
+    profile = tmp_path / 'Users/Trader'
+    (profile / 'Desktop').mkdir(parents=True)
+    monkeypatch.setenv('SystemDrive', str(tmp_path))
+    monkeypatch.setattr('agent.infrastructure.terminal_inspection.fixed_drives', lambda: [])
+    assert profile in user_profiles()
+    roots = default_roots()
+    for part in ['Desktop', 'Downloads', 'Documents', 'AppData/Local/Programs']:
+        assert profile / part in roots
