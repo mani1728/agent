@@ -1,8 +1,8 @@
-# MT5 Agent — v0.1.1 development
+# MT5 Agent — v0.1.2 development
 
 The active agent provides MT5 lifecycle management, an HTTP/JSON command
-boundary, capability discovery and runtime introspection. v0.1.0 is released;
-v0.1.1 is the current maintenance candidate awaiting manual acceptance.
+boundary, capability discovery and runtime introspection. v0.1.1 is released;
+v0.1.2 is the current feature candidate awaiting manual acceptance.
 See [CHANGELOG.md](CHANGELOG.md) for released and unreleased changes.
 
 GitLab (`origin`) is the source of truth. GitHub is a downstream mirror.
@@ -85,6 +85,48 @@ Runtime startup may initialize a locally installed MT5 terminal. Exit codes are:
 | 1 | MT5 startup, hosting or shutdown failure |
 | 2 | Invalid startup configuration |
 
+## Diagnostic and version CLI
+
+```powershell
+.\dist\MT5Agent-v0.1.2.exe --version
+.\dist\MT5Agent-v0.1.2.exe --diagnose
+.\dist\MT5Agent-v0.1.2.exe --diagnose --json
+```
+
+`--version` prints the canonical version and exits 0 without importing the MT5
+integration or constructing the host. Diagnostics reuse environment configuration
+validation and perform inspection only: no MT5 initialization, terminal launch,
+HTTP binding or log-file creation. JSON output includes identity, configuration,
+terminal paths, process presence, dependency availability and readiness.
+
+Diagnostic exit 0 means required inspection checks passed; exit 1 means not
+ready (including invalid configuration, missing terminal/dependency, unsupported
+platform or incomplete inspection). Invalid CLI syntax exits 2. A terminal need
+not already be running. Readiness does not prove account login, MT5 connectivity
+or HTTP port availability.
+
+Discovery checks standard installation directories, registered installations,
+MetaQuotes origin records, drive roots and immediate portable subdirectories,
+Desktop/Downloads/Documents and executable/current directories. Unlisted deeper
+portable locations can be missed; no exhaustive absence claim is made. Normal
+startup retains the vendor's `initialize()` automatic selection and may launch
+MT5. Inspection never substitutes a different path into that call.
+
+## Logging
+
+Production composition uses the existing operational-observability port with a
+standard-library logging adapter. INFO covers startup/version, validated config,
+MT5 discovery and initialization, lifecycle, HTTP listening and shutdown request.
+DEBUG adds safe technical diagnostics. Event metadata, account data, passwords,
+tokens and raw MT5 exception details are omitted. Paths appear in explicit
+self-check output so the user can identify installations.
+
+Set `MT5_AGENT_LOG_LEVEL` to DEBUG, INFO (default), WARNING or ERROR. Values are
+case-insensitive; unsupported values fail configuration validation. Optional
+`MT5_AGENT_LOG_FILE` appends UTF-8 logs alongside console output; its parent must
+already exist. An unavailable file or broken logging sink does not stop the
+Agent. Diagnostics validate these settings without opening the file.
+
 ## Configuration
 
 | Environment variable | Default | Constraint |
@@ -92,6 +134,8 @@ Runtime startup may initialize a locally installed MT5 terminal. Exit codes are:
 | `MT5_AGENT_HTTP_HOST` | `127.0.0.1` | Non-empty string |
 | `MT5_AGENT_HTTP_PORT` | `8080` | Integer 1..65535 |
 | `MT5_AGENT_HTTP_MAX_REQUEST_BYTES` | `1048576` | Positive integer |
+| `MT5_AGENT_LOG_LEVEL` | `INFO` | DEBUG / INFO / WARNING / ERROR |
+| `MT5_AGENT_LOG_FILE` | Unset | Optional log file path; existing parent directory |
 
 There is no active config.json/config.jsonc loader or service_host.py in this
 stage. See [configuration](docs/CONFIGURATION.md) and [transport](docs/TRANSPORT.md).
@@ -108,7 +152,7 @@ python -m pytest -q
 ```
 
 Pytest collects `tests/` only by default. Generated icon, reports, build/
-and dist/ are ignored. The test executable is `dist/MT5Agent-v0.1.1.exe`.
+and dist/ are ignored. The test executable is `dist/MT5Agent-v0.1.2.exe`.
 It is a maintenance candidate, not a published release.
 
 Use [deployment/ci.ps1](deployment/ci.ps1) for the same validation and smoke
@@ -123,13 +167,15 @@ on registered local Windows runners using `pwsh`. Runner tags are
 stable semantic-version tags (`v0.1.1`, `v0.2.0`) use the same validation chain.
 Tag pipelines reject a tag that disagrees with the source version.
 
-Invalid-configuration smoke is automatic. Terminal-unavailable smoke remains a
+Version/diagnostic CLI checks and invalid-configuration smoke are automatic.
+An inspection-only preflight runs on the no-MT5 runner before explicit confirmation.
+Terminal-unavailable smoke remains a
 blocking manual job: explicitly confirm isolation when launching that job.
 Final packaging requires both smoke receipts and build evidence for the same
 binary, commit and pipeline; it never rebuilds. A no-MT5 runner tag alone does
 not establish that no terminal is accessible. See [CI instructions](docs/CI.md).
 
-GitLab produced and validated v0.1.0. The obsolete GitHub Actions workflow has
+GitLab produced and validated v0.1.1. The obsolete GitHub Actions workflow has
 been retired; GitHub is a push mirror/archive only.
 
 ## Documentation

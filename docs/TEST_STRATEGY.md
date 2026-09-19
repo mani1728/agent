@@ -1,4 +1,4 @@
-# Test Strategy — v0.1.1 development
+# Test Strategy — v0.1.2 development
 
 ## Contract tests
 

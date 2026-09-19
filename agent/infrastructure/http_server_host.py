@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import threading
+import logging
 from collections.abc import Callable
 from http.server import ThreadingHTTPServer
+from agent.infrastructure.logging_observability import safe_log
 
 
 class HTTPServerHost:
@@ -26,6 +28,8 @@ class HTTPServerHost:
             server.server_close()
             return
         try:
+            safe_log(logging.getLogger(__name__), logging.INFO,
+                     "HTTP host listening on %s:%s", *server.server_address[:2])
             server.serve_forever()
         finally:
             server.server_close()
@@ -34,6 +38,7 @@ class HTTPServerHost:
 
     def shutdown(self) -> None:
         """Request graceful termination of the active or next serving loop."""
+        safe_log(logging.getLogger(__name__), logging.INFO, "Shutdown requested")
         with self._lock:
             self._shutdown_requested = True
             server = self._server

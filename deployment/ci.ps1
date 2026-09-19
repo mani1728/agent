@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('metadata', 'validate', 'test', 'build', 'smoke-invalid', 'smoke-unavailable', 'package')]
+    [ValidateSet('metadata', 'validate', 'test', 'build', 'smoke-invalid', 'inspect-terminal', 'smoke-unavailable', 'package')]
     [string]$Task,
     [string]$PythonExecutable = 'python',
     [string]$ArtifactName = ''
@@ -53,6 +53,54 @@ function Assert-BuildEvidence {
         $build.pipeline_id -ne $pipelineId) {
         throw 'Missing or mismatched build evidence for this commit/pipeline'
     }
+}
+
+function Invoke-CandidateCommand {
+    param([string]$Name, [string[]]$Arguments)
+    $stdout = Join-Path $reportRoot "$Name.stdout.log"
+    $stderr = Join-Path $reportRoot "$Name.stderr.log"
+    $process = Start-Process -FilePath $exePath -ArgumentList $Arguments -WorkingDirectory $repoRoot `
+        -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    try {
+        if (-not $process.WaitForExit(30000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw "$Name exceeded the 30-second inspection limit"
+        }
+        $process.WaitForExit()
+        return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = (Get-Content $stdout -Raw) }
+    }
+    finally { $process.Dispose() }
+}
+
+function Test-CandidateCLI {
+    Assert-BuildEvidence
+    $versionResult = Invoke-CandidateCommand -Name 'version' -Arguments @('--version')
+    if ($versionResult.ExitCode -ne 0 -or $versionResult.Output.Trim() -cne $version) {
+        throw 'Executable --version failed or disagrees with source metadata'
+    }
+    $result = Invoke-CandidateCommand -Name 'diagnostics' -Arguments @('--diagnose', '--json')
+    $inspection = $result.Output | ConvertFrom-Json
+    $expectedExit = if ($inspection.ready) { 0 } else { 1 }
+    if ($result.ExitCode -ne $expectedExit -or $inspection.agent_version -ne $version -or
+        $inspection.inspection_only -ne $true -or $inspection.configuration.valid -ne $true -or
+        $inspection.terminal.dependency_available -ne $true) {
+        throw 'Executable diagnostics failed validation'
+    }
+    Assert-BuildEvidence
+    return $inspection
+}
+
+function Assert-NoTerminal {
+    if (Get-Process -Name terminal,terminal64,metatrader,metatrader64 -ErrorAction SilentlyContinue) {
+        throw 'A terminal is running; refuse terminal-unavailable smoke'
+    }
+    $inspection = Test-CandidateCLI
+    if ($inspection.terminal.supported -ne $true -or $inspection.terminal.process_running -ne $false -or
+        @($inspection.terminal.paths).Count -ne 0 -or @($inspection.terminal.errors).Count -ne 0) {
+        throw 'Terminal present or inspection incomplete; no-MT5 confirmation is unsafe'
+    }
+    Write-Output 'No-MT5 preflight: no terminal process or executable found in inspected locations'
+    Write-Output ($inspection.terminal.searched_locations -join '; ')
 }
 
 function Invoke-Smoke {
@@ -137,6 +185,7 @@ try {
             Write-Output "Built $exePath; SHA256=$(Get-BinaryHash)"
         }
         'smoke-invalid' {
+            $null = Test-CandidateCLI
             $previousPort = [Environment]::GetEnvironmentVariable('MT5_AGENT_HTTP_PORT', 'Process')
             try {
                 $env:MT5_AGENT_HTTP_PORT = 'invalid'
@@ -146,14 +195,14 @@ try {
                 [Environment]::SetEnvironmentVariable('MT5_AGENT_HTTP_PORT', $previousPort, 'Process')
             }
         }
+        'inspect-terminal' {
+            Assert-NoTerminal
+        }
         'smoke-unavailable' {
             $receiptPath = Join-Path $reportRoot 'terminal-unavailable.json'
             if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath }
             if ($env:MT5_TERMINAL_UNAVAILABLE_CONFIRMED -ne 'true') {
                 throw 'Use an isolated VM with no accessible MT5 terminal, then explicitly set MT5_TERMINAL_UNAVAILABLE_CONFIRMED=true'
-            }
-            if (Get-Process -Name terminal,terminal64 -ErrorAction SilentlyContinue) {
-                throw 'An MT5 terminal is running; refuse terminal-unavailable smoke'
             }
 
             $names = @('MT5_AGENT_HTTP_HOST', 'MT5_AGENT_HTTP_PORT', 'MT5_AGENT_HTTP_MAX_REQUEST_BYTES')
@@ -168,6 +217,7 @@ try {
                 $env:MT5_AGENT_HTTP_PORT = '18080'
                 $env:MT5_AGENT_HTTP_MAX_REQUEST_BYTES = '1048576'
 
+                Assert-NoTerminal
                 Invoke-Smoke -Name 'terminal-unavailable' -ExpectedExit 1 -ExpectedErrorPattern '\(agent_start_failed\)'
             }
             finally {

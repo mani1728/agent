@@ -1,4 +1,4 @@
-# Architecture — v0.1.1 development
+# Architecture — v0.1.2 development
 
 ## Agent Capability Discovery & Runtime Introspection Foundation
 
@@ -48,3 +48,19 @@ Discovered
 Security ordering remains Validation → Authentication → Authorization → Dispatch.
 
 Capability discovery uses the existing command path and does not modify operational observability boundaries.
+
+## Diagnostics and production observability (v0.1.2)
+
+CLI parsing stays at the entry point. Diagnostics reuse the configuration
+provider and delegate Windows inspection to infrastructure, without composing a
+host. The vendor API exposes auto-discovery through initialization, which may
+launch a terminal; therefore self-check uses an explicitly bounded inventory
+instead of calling initialize. See the
+[official initialize contract](https://www.mql5.com/en/docs/python_metatrader5/mt5initialize_py).
+Normal runtime selection is unchanged.
+
+Production composition injects LoggingOperationalObservability via the existing
+port. NullOperationalObservability remains available for isolated hosts/tests.
+The adapter only emits allowlisted lifecycle messages, ignoring arbitrary event
+metadata. Concrete MT5 and HTTP infrastructure log initialization/listening and
+shutdown details through best-effort standard logging; Core remains isolated.

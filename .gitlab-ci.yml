@@ -100,6 +100,29 @@ smoke:invalid-configuration:
       - dist/MT5Agent-v*.exe
       - reports/build.json
       - reports/invalid-configuration.*
+      - reports/version.*
+      - reports/diagnostics.*
+
+# Inspection-only preflight on the intended no-MT5 runner, before confirmation.
+smoke:inspect-terminal:
+  stage: smoke
+  timeout: 5 minutes
+  tags:
+    - '$MT5_SMOKE_RUNNER_TAG'
+  needs:
+    - job: smoke:invalid-configuration
+      artifacts: true
+  script:
+    - '& ./deployment/ci.ps1 -Task inspect-terminal'
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - dist/MT5Agent-v*.exe
+      - reports/build.json
+      - reports/invalid-configuration.*
+      - reports/version.*
+      - reports/diagnostics.*
 
 # Blocking manual gate on the registered no-MT5 runner. At job launch, explicitly
 # set MT5_TERMINAL_UNAVAILABLE_CONFIRMED=true after verifying terminal isolation.
@@ -110,7 +133,7 @@ smoke:terminal-unavailable:
   tags:
     - '$MT5_SMOKE_RUNNER_TAG'
   needs:
-    - job: smoke:invalid-configuration
+    - job: smoke:inspect-terminal
       artifacts: true
   when: manual
   allow_failure: false
@@ -124,6 +147,8 @@ smoke:terminal-unavailable:
       - reports/build.json
       - reports/invalid-configuration.*
       - reports/terminal-unavailable.*
+      - reports/version.*
+      - reports/diagnostics.*
 
 package:windows:
   stage: package
@@ -142,3 +167,5 @@ package:windows:
       - sha256.txt
       - reports/invalid-configuration.json
       - reports/terminal-unavailable.json
+      - reports/version.*
+      - reports/diagnostics.*

@@ -20,7 +20,7 @@ record of a completed release. Historical release facts are in ../CHANGELOG.md.
 - [ ] Run pytest from repository root; collection is confined to tests/.
 - [ ] Generate the icon with python deployment/make_icon.py.
 - [ ] Build with python -m PyInstaller deployment/Agent.spec --clean --noconfirm.
-- [ ] Verify dist/MT5Agent-v0.1.1.exe exists and matches the canonical source version.
+- [ ] Verify dist/MT5Agent-v0.1.2.exe exists and matches the canonical source version.
 - [ ] Verify invalid startup configuration exits with code 2.
 - [ ] On an isolated VM without an accessible MT5 terminal, verify exit code 1.
 - [ ] Record manual Windows/MT5 graceful-shutdown acceptance for the candidate.
