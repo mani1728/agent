@@ -22,8 +22,22 @@ class HTTPTransportConfig:
 
 
 @dataclass(frozen=True)
+class LoggingConfig:
+    level: str = "INFO"
+    file: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
+            raise ConfigurationError("MT5_AGENT_LOG_LEVEL must be DEBUG, INFO, WARNING or ERROR")
+        if self.file is not None and (not isinstance(self.file, str) or not self.file.strip()
+                                     or any(c in self.file for c in "\x00\r\n")):
+            raise ConfigurationError("MT5_AGENT_LOG_FILE must be a non-empty file path")
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     http: HTTPTransportConfig = HTTPTransportConfig()
+    logging: LoggingConfig = LoggingConfig()
 
 
 @runtime_checkable

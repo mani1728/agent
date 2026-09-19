@@ -13,6 +13,7 @@ from agent.contracts.operational_observability import OperationalObservabilityPo
 from agent.contracts.ports import AuthenticationPort, AuthorizationPort, HostingPort, MT5Port, ObservabilityPort
 from agent.core.agent import Agent
 from agent.infrastructure.http_server_host import HTTPServerHost
+from agent.infrastructure.logging_observability import LoggingOperationalObservability
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ def compose_agent(
     host = ApplicationHost(
         agent,
         concrete_hosting,
-        operational_observability=operational_observability,
+        operational_observability=(operational_observability if operational_observability is not None
+                                   else LoggingOperationalObservability()),
     )
     return AgentComposition(config, agent, dispatcher, application, transport, concrete_hosting, host)
