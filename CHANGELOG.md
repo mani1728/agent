@@ -6,7 +6,16 @@ verification statements below describe those records, not fresh validation of
 old binaries. Release assets and publication dates have not been independently
 revalidated here, so no publication dates are inferred from commit timestamps.
 
-## [Unreleased] — v0.1.2 development
+## [Unreleased] — v0.1.3 development
+
+### Changed
+
+- CI now automatically fails safe and runs the terminal-unavailable smoke only after
+  the Agent's packaged inspection proves the dedicated runner has no discoverable MT5.
+- Added a separate, inspection-only MT5-runner smoke for the reference installation
+  and data environment; it never starts or terminates MT5.
+
+## [0.1.2] — Diagnostics, lifecycle logging, and dual-runner CI foundation
 
 ### Added
 

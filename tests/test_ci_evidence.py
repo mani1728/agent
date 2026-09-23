@@ -37,7 +37,7 @@ def checkout(tmp_path):
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
     evidence = dict(executable=binary_name, sha256=digest, source_commit=commit, pipeline_id="123")
     (tmp_path / "reports/build.json").write_text(json.dumps(dict(evidence, version=__version__)))
-    for name, code in [("invalid-configuration", 2), ("terminal-unavailable", 1)]:
+    for name, code in [("invalid-configuration", 2), ("terminal-unavailable", 1), ("terminal-available", 0)]:
         (tmp_path / f"reports/{name}.json").write_text(json.dumps(dict(
             evidence, test=name, expected_exit=code, actual_exit=code)))
     env = {k: v for k, v in os.environ.items() if not k.startswith("CI_")
@@ -103,12 +103,10 @@ def test_package_requires_both_smokes(checkout):
     assert not (path / "sha256.txt").exists()
 
 
-def test_unavailable_smoke_requires_explicit_confirmation(checkout):
+def test_package_requires_available_smoke(checkout):
     path, _ = checkout
-    result = run_task(checkout, "smoke-unavailable")
-    assert result.returncode != 0
-    assert "MT5_TERMINAL_UNAVAILABLE_CONFIRMED=true" in result.stderr
-    assert not (path / "reports/terminal-unavailable.json").exists()
+    (path / "reports/terminal-available.json").unlink()
+    assert run_task(checkout, "package").returncode != 0
 
 @pytest.mark.parametrize('field,value,accepted', [
     ('paths', [], True), ('paths', ['C:/MT5/terminal64.exe'], False),

@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('metadata', 'validate', 'test', 'build', 'smoke-invalid', 'inspect-terminal', 'smoke-unavailable', 'package')]
+    [ValidateSet('metadata', 'validate', 'test', 'build', 'smoke-invalid', 'inspect-terminal', 'smoke-unavailable', 'smoke-available', 'package')]
     [string]$Task,
     [string]$PythonExecutable = 'python',
     [string]$ArtifactName = ''
@@ -103,6 +103,21 @@ function Assert-NoTerminal {
     Write-Output ($inspection.terminal.searched_locations -join '; ')
 }
 
+function Assert-ReferenceTerminal {
+    $identity = (& whoami).Trim()
+    $expectedExe = 'C:\Program Files\MetaTrader 5\terminal64.exe'
+    $expectedData = 'C:\Users\Administrator\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075'
+    $origin = Join-Path $expectedData 'origin.txt'
+    if ($identity -notmatch 'MANI-PC\\Administrator$') { throw 'Unexpected MT5 runner identity' }
+    if (-not (Test-Path -LiteralPath $expectedExe -PathType Leaf) -or -not (Test-Path -LiteralPath $origin -PathType Leaf)) { throw 'Expected MT5 reference environment is unavailable' }
+    $originValue = (Get-Content -LiteralPath $origin -Raw).Trim()
+    if ($originValue -ne 'C:\Program Files\MetaTrader 5') { throw 'Reference MT5 data environment does not map to the expected installation' }
+    $inspection = Test-CandidateCLI
+    if ($inspection.terminal.supported -ne $true -or $inspection.terminal.dependency_available -ne $true -or
+        $inspection.terminal.errors.Count -ne 0 -or $inspection.terminal.paths -notcontains $expectedExe) { throw 'Agent inspection did not find the expected MT5 installation' }
+    Write-Output "MT5 runner identity=$identity; APPDATA=$env:APPDATA; LOCALAPPDATA=$env:LOCALAPPDATA"
+}
+
 function Invoke-Smoke {
     param([string]$Name, [int]$ExpectedExit, [string]$ExpectedErrorPattern)
     Assert-BuildEvidence
@@ -201,10 +216,6 @@ try {
         'smoke-unavailable' {
             $receiptPath = Join-Path $reportRoot 'terminal-unavailable.json'
             if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath }
-            if ($env:MT5_TERMINAL_UNAVAILABLE_CONFIRMED -ne 'true') {
-                throw 'Use an isolated VM with no accessible MT5 terminal, then explicitly set MT5_TERMINAL_UNAVAILABLE_CONFIRMED=true'
-            }
-
             $names = @('MT5_AGENT_HTTP_HOST', 'MT5_AGENT_HTTP_PORT', 'MT5_AGENT_HTTP_MAX_REQUEST_BYTES')
             $previousValues = @{}
 
@@ -226,12 +237,17 @@ try {
                 }
             }
         }
+        'smoke-available' {
+            Assert-ReferenceTerminal
+            $hash = Get-BinaryHash
+            [ordered]@{ test='terminal-available'; executable="$ArtifactName.exe"; sha256=$hash; source_commit=$sourceCommit; pipeline_id=$pipelineId; expected_exit=0; actual_exit=0 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $reportRoot 'terminal-available.json') -Encoding utf8
+        }
         'package' {
             $checksumPath = Join-Path $repoRoot 'sha256.txt'
             if (Test-Path -LiteralPath $checksumPath) { Remove-Item -LiteralPath $checksumPath }
             Assert-BuildEvidence
             $binaryHash = Get-BinaryHash
-            $checks = @{'invalid-configuration' = 2; 'terminal-unavailable' = 1}
+            $checks = @{'invalid-configuration' = 2; 'terminal-unavailable' = 1; 'terminal-available' = 0}
             foreach ($name in $checks.Keys) {
                 $receipt = Get-Content -LiteralPath (Join-Path $reportRoot "$name.json") -Raw | ConvertFrom-Json
                 if ($receipt.test -ne $name -or $receipt.executable -ne "$ArtifactName.exe" -or
