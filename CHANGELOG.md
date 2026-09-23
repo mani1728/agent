@@ -14,6 +14,8 @@ revalidated here, so no publication dates are inferred from commit timestamps.
   the Agent's packaged inspection proves the dedicated runner has no discoverable MT5.
 - Added a separate, inspection-only MT5-runner smoke for the reference installation
   and data environment; it never starts or terminates MT5.
+- Added retained MT5-runner session and process-ownership probe evidence before any
+  future controlled terminal or Agent runtime attempt.
 
 ## [0.1.2] — Diagnostics, lifecycle logging, and dual-runner CI foundation
 

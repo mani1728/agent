@@ -1,8 +1,8 @@
-# MT5 Agent — v0.1.2 development
+# MT5 Agent — v0.1.3 development
 
 The active agent provides MT5 lifecycle management, an HTTP/JSON command
-boundary, capability discovery and runtime introspection. v0.1.1 is released;
-v0.1.2 is the current feature candidate awaiting manual acceptance.
+boundary, capability discovery and runtime introspection. v0.1.2 is released;
+v0.1.3 is active development.
 See [CHANGELOG.md](CHANGELOG.md) for released and unreleased changes.
 
 GitLab (`origin`) is the source of truth. GitHub is a downstream mirror.
@@ -88,9 +88,9 @@ Runtime startup may initialize a locally installed MT5 terminal. Exit codes are:
 ## Diagnostic and version CLI
 
 ```powershell
-.\dist\MT5Agent-v0.1.2.exe --version
-.\dist\MT5Agent-v0.1.2.exe --diagnose
-.\dist\MT5Agent-v0.1.2.exe --diagnose --json
+.\dist\MT5Agent-v0.1.3.exe --version
+.\dist\MT5Agent-v0.1.3.exe --diagnose
+.\dist\MT5Agent-v0.1.3.exe --diagnose --json
 ```
 
 `--version` prints the canonical version and exits 0 without importing the MT5
@@ -152,7 +152,7 @@ python -m pytest -q
 ```
 
 Pytest collects `tests/` only by default. Generated icon, reports, build/
-and dist/ are ignored. The test executable is `dist/MT5Agent-v0.1.2.exe`.
+and dist/ are ignored. The test executable is `dist/MT5Agent-v0.1.3.exe`.
 It is a maintenance candidate, not a published release.
 
 Use [deployment/ci.ps1](deployment/ci.ps1) for the same validation and smoke
@@ -163,17 +163,18 @@ artifact handoff and checksum verification.
 
 The GitLab configuration runs validate, test, build, smoke and package stages
 on registered local Windows runners using `pwsh`. Runner tags are
-`windows-self-hosted` and `windows-self-hosted-no-mt5`. Branch pipelines and
+`windows-self-hosted`, `windows-self-hosted-no-mt5`, and
+`windows-self-hosted-mt5`. Branch pipelines and
 stable semantic-version tags (`v0.1.1`, `v0.2.0`) use the same validation chain.
 Tag pipelines reject a tag that disagrees with the source version.
 
 Version/diagnostic CLI checks and invalid-configuration smoke are automatic.
-An inspection-only preflight runs on the no-MT5 runner before explicit confirmation.
-Terminal-unavailable smoke remains a
-blocking manual job: explicitly confirm isolation when launching that job.
-Final packaging requires both smoke receipts and build evidence for the same
-binary, commit and pipeline; it never rebuilds. A no-MT5 runner tag alone does
-not establish that no terminal is accessible. See [CI instructions](docs/CI.md).
+The no-MT5 runner must prove terminal absence before its automatic unavailable
+smoke runs. The reference-MT5 runner proves the expected installation/data mapping
+and records session/process ownership evidence without starting or terminating MT5.
+Final packaging requires both terminal-validation receipts, the runtime-probe
+receipt, and build evidence for the same binary, commit and pipeline; it never
+rebuilds. See [CI instructions](docs/CI.md).
 
 GitLab produced and validated v0.1.1. The obsolete GitHub Actions workflow has
 been retired; GitHub is a push mirror/archive only.

@@ -167,6 +167,27 @@ smoke:terminal-available:
       - reports/version.*
       - reports/diagnostics.*
 
+# Session and process-ownership evidence only. This does not start MT5 or the Agent.
+probe:mt5-runtime:
+  stage: smoke
+  timeout: 5 minutes
+  tags:
+    - '$MT5_AVAILABLE_RUNNER_TAG'
+  needs:
+    - job: build:windows
+      artifacts: true
+  script:
+    - '& ./deployment/ci.ps1 -Task probe-mt5-runtime -ArtifactName $env:ARTIFACT_NAME'
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - dist/MT5Agent-v*.exe
+      - reports/build.json
+      - reports/mt5-runtime-probe.json
+      - reports/version.*
+      - reports/diagnostics.*
+
 package:windows:
   stage: package
   timeout: 5 minutes
@@ -174,6 +195,8 @@ package:windows:
     - job: smoke:terminal-unavailable
       artifacts: true
     - job: smoke:terminal-available
+      artifacts: true
+    - job: probe:mt5-runtime
       artifacts: true
   script:
     - '& ./deployment/ci.ps1 -Task package -ArtifactName $env:ARTIFACT_NAME'
@@ -187,5 +210,6 @@ package:windows:
       - reports/invalid-configuration.json
       - reports/terminal-unavailable.json
       - reports/terminal-available.json
+      - reports/mt5-runtime-probe.json
       - reports/version.*
       - reports/diagnostics.*

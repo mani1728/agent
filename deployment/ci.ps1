@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('metadata', 'validate', 'test', 'build', 'smoke-invalid', 'inspect-terminal', 'smoke-unavailable', 'smoke-available', 'package')]
+    [ValidateSet('metadata', 'validate', 'test', 'build', 'smoke-invalid', 'inspect-terminal', 'smoke-unavailable', 'smoke-available', 'probe-mt5-runtime', 'package')]
     [string]$Task,
     [string]$PythonExecutable = 'python',
     [string]$ArtifactName = ''
@@ -118,6 +118,60 @@ function Assert-ReferenceTerminal {
     Write-Output "MT5 runner identity=$identity; APPDATA=$env:APPDATA; LOCALAPPDATA=$env:LOCALAPPDATA"
 }
 
+function Get-ReferenceTerminalProcesses {
+    $expectedExe = 'C:\Program Files\MetaTrader 5\terminal64.exe'
+    try {
+        $processes = @(Get-CimInstance Win32_Process -Filter "Name = 'terminal64.exe'" |
+            Where-Object { $_.ExecutablePath -and $_.ExecutablePath -ieq $expectedExe })
+    }
+    catch {
+        throw 'Cannot determine reference MT5 process ownership'
+    }
+    return $processes
+}
+
+function Get-ProcessSessionId {
+    param([int]$ProcessId)
+    try {
+        return (Get-Process -Id $ProcessId -ErrorAction Stop).SessionId
+    }
+    catch {
+        throw "Cannot determine session for process $ProcessId"
+    }
+}
+
+function Write-Mt5RuntimeProbe {
+    Assert-ReferenceTerminal
+    $currentProcess = Get-Process -Id $PID -ErrorAction Stop
+    $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop).ParentProcessId
+    $referenceProcesses = @(Get-ReferenceTerminalProcesses)
+    $hash = Get-BinaryHash
+    $receipt = [ordered]@{
+        test = 'mt5-runtime-probe'
+        executable = "$ArtifactName.exe"
+        sha256 = $hash
+        source_commit = $sourceCommit
+        pipeline_id = $pipelineId
+        expected_exit = 0
+        actual_exit = 0
+        runner_identity = (& whoami).Trim()
+        runner_process_id = $PID
+        runner_session_id = $currentProcess.SessionId
+        runner_parent_process_id = $parentId
+        runner_parent_session_id = Get-ProcessSessionId -ProcessId $parentId
+        reference_terminal = 'C:\Program Files\MetaTrader 5\terminal64.exe'
+        pre_existing_reference_mt5 = ($referenceProcesses.Count -gt 0)
+        pre_existing_reference_mt5_processes = @($referenceProcesses | ForEach-Object {
+            [ordered]@{ process_id = $_.ProcessId; session_id = Get-ProcessSessionId -ProcessId $_.ProcessId; executable = $_.ExecutablePath }
+        })
+        ci_started_mt5 = $false
+        agent_started = $false
+        runtime_attempted = $false
+    }
+    $receipt | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $reportRoot 'mt5-runtime-probe.json') -Encoding utf8
+    Write-Output "MT5 runtime probe: runner_session=$($currentProcess.SessionId); pre_existing_reference_mt5=$($receipt.pre_existing_reference_mt5)"
+}
+
 function Invoke-Smoke {
     param([string]$Name, [int]$ExpectedExit, [string]$ExpectedErrorPattern)
     Assert-BuildEvidence
@@ -184,7 +238,7 @@ try {
         'build' {
             # Prevent stale executables/evidence from being uploaded after a failed build.
             if (Test-Path -LiteralPath $exePath) { Remove-Item -LiteralPath $exePath }
-            foreach ($name in @('build', 'invalid-configuration', 'terminal-unavailable')) {
+            foreach ($name in @('build', 'invalid-configuration', 'terminal-unavailable', 'terminal-available', 'mt5-runtime-probe')) {
                 $receiptPath = Join-Path $reportRoot "$name.json"
                 if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath }
             }
@@ -242,12 +296,15 @@ try {
             $hash = Get-BinaryHash
             [ordered]@{ test='terminal-available'; executable="$ArtifactName.exe"; sha256=$hash; source_commit=$sourceCommit; pipeline_id=$pipelineId; expected_exit=0; actual_exit=0 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $reportRoot 'terminal-available.json') -Encoding utf8
         }
+        'probe-mt5-runtime' {
+            Write-Mt5RuntimeProbe
+        }
         'package' {
             $checksumPath = Join-Path $repoRoot 'sha256.txt'
             if (Test-Path -LiteralPath $checksumPath) { Remove-Item -LiteralPath $checksumPath }
             Assert-BuildEvidence
             $binaryHash = Get-BinaryHash
-            $checks = @{'invalid-configuration' = 2; 'terminal-unavailable' = 1; 'terminal-available' = 0}
+            $checks = @{'invalid-configuration' = 2; 'terminal-unavailable' = 1; 'terminal-available' = 0; 'mt5-runtime-probe' = 0}
             foreach ($name in $checks.Keys) {
                 $receipt = Get-Content -LiteralPath (Join-Path $reportRoot "$name.json") -Raw | ConvertFrom-Json
                 if ($receipt.test -ne $name -or $receipt.executable -ne "$ArtifactName.exe" -or

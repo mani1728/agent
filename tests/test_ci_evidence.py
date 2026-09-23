@@ -37,7 +37,7 @@ def checkout(tmp_path):
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
     evidence = dict(executable=binary_name, sha256=digest, source_commit=commit, pipeline_id="123")
     (tmp_path / "reports/build.json").write_text(json.dumps(dict(evidence, version=__version__)))
-    for name, code in [("invalid-configuration", 2), ("terminal-unavailable", 1), ("terminal-available", 0)]:
+    for name, code in [("invalid-configuration", 2), ("terminal-unavailable", 1), ("terminal-available", 0), ("mt5-runtime-probe", 0)]:
         (tmp_path / f"reports/{name}.json").write_text(json.dumps(dict(
             evidence, test=name, expected_exit=code, actual_exit=code)))
     env = {k: v for k, v in os.environ.items() if not k.startswith("CI_")
@@ -106,6 +106,12 @@ def test_package_requires_both_smokes(checkout):
 def test_package_requires_available_smoke(checkout):
     path, _ = checkout
     (path / "reports/terminal-available.json").unlink()
+    assert run_task(checkout, "package").returncode != 0
+
+
+def test_package_requires_runtime_probe(checkout):
+    path, _ = checkout
+    (path / "reports/mt5-runtime-probe.json").unlink()
     assert run_task(checkout, "package").returncode != 0
 
 @pytest.mark.parametrize('field,value,accepted', [
