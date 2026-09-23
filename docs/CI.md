@@ -2,7 +2,7 @@
 
 GitLab (`origin`) is the source of truth. GitHub is a push mirror/archive only;
 the obsolete Actions workflow is retired. CI produces candidate artifacts, not
-merges, tags or releases. v0.1.0 remains immutable.
+merges, tags or releases. v0.1.0 and v0.1.1 remain immutable.
 
 ## Runner and safety settings
 
@@ -31,7 +31,7 @@ to make this test pass. The job remains manual and blocking (`allow_failure: fal
 ## Pipeline and evidence
 
 ```text
-validate -> test -> build -> smoke-invalid -> smoke-unavailable (manual) -> package
+validate -> test -> build -> smoke-invalid -> inspect-terminal -> smoke-unavailable (manual) -> package
 ```
 
 Workflow rules allow stable semantic-version tags such as `v0.1.1` and `v0.2.0`,
@@ -96,3 +96,18 @@ If authentication is unavailable, record that limitation and run local YAML,
 PowerShell syntax, dependency graph and artifact/evidence checks. Local checks
 cannot prove runner scheduling or artifact uploads. See the
 [CI Lint API](https://docs.gitlab.com/api/lint/).
+
+## v0.1.2 CLI and no-MT5 preflight
+
+Invalid-configuration smoke first validates packaged `--version` and
+`--diagnose --json`. The automatic `smoke:inspect-terminal` job then runs the
+same inspection on the no-MT5 runner. It rejects a running terminal, discovered
+executable, unavailable dependency or incomplete inspection before the manual
+gate. Review its diagnostic output and the intended isolated machine before
+explicitly confirming the manual smoke. The manual job repeats inspection to
+catch changes between jobs. Bounded discovery is not proof of exhaustive absence;
+operator knowledge of other portable installations remains necessary.
+
+Artifact handoff includes version/diagnostic logs and the original build/smoke
+receipts. Packaging still verifies hash, source commit and pipeline ID and does
+not rebuild. No v0.1.2 tag or release is created during development.

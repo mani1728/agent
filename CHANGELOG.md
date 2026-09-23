@@ -6,7 +6,33 @@ verification statements below describe those records, not fresh validation of
 old binaries. Release assets and publication dates have not been independently
 revalidated here, so no publication dates are inferred from commit timestamps.
 
-## [Unreleased] — v0.1.1 development
+## [Unreleased] — v0.1.2 development
+
+### Added
+
+- Inspection-only `--diagnose` and `--diagnose --json`, with deterministic
+  readiness exit codes and bounded Windows terminal/dependency/process checks.
+- `--version` exits without initializing MT5 or entering the application host.
+- Production lifecycle logging through the operational-observability port,
+  configurable `MT5_AGENT_LOG_LEVEL` and optional best-effort `MT5_AGENT_LOG_FILE`.
+- Regression coverage for CLI side effects, diagnostics, logging, confidentiality,
+  and no-MT5 inspection gates without requiring real terminals in unit tests.
+
+### Changed
+
+- Canonical active version is 0.1.2; executable is `MT5Agent-v0.1.2.exe`.
+- CI exercises packaged CLI modes and inspects the no-MT5 runner before the
+  blocking manual confirmation; smoke rechecks absence before initialization.
+- Normal no-argument startup retains vendor automatic terminal selection,
+  existing exit codes and protocol behavior. No historical release is modified.
+
+## [0.1.1] — Runtime identity and GitLab delivery maintenance
+
+Released at `41a641d7d1a809bcb062b4785256a8a9189c95ba`, tag `v0.1.1`.
+GitLab pipelines #7/#8/#9 and final-artifact Windows/MT5 manual acceptance
+passed (maintainer-confirmed). Official executable SHA256:
+`258c935737ca9ba0af03436f258d03d4043fd6d9851c73a32c03b38931393190`.
+The tag and release remain immutable.
 
 ### Fixed
 
@@ -29,7 +55,7 @@ revalidated here, so no publication dates are inferred from commit timestamps.
 - Retired the obsolete GitHub Actions workflow and refreshed canonical runtime,
   CI and release-checklist documentation. Generated outputs remain ignored.
 
-No v0.1.1 promotion, tag or release is part of this maintenance work.
+
 
 ## [0.1.0] — Capability discovery and canonical GitLab delivery
 

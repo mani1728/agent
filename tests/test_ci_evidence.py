@@ -109,3 +109,23 @@ def test_unavailable_smoke_requires_explicit_confirmation(checkout):
     assert result.returncode != 0
     assert "MT5_TERMINAL_UNAVAILABLE_CONFIRMED=true" in result.stderr
     assert not (path / "reports/terminal-unavailable.json").exists()
+
+@pytest.mark.parametrize('field,value,accepted', [
+    ('paths', [], True), ('paths', ['C:/MT5/terminal64.exe'], False),
+    ('process_running', True, False), ('process_running', None, False),
+    ('errors', ['filesystem_inspection_failed'], False), ('supported', False, False),
+])
+def test_no_mt5_preflight_rejects_present_or_unknown_terminal(checkout, field, value, accepted):
+    path, env = checkout
+    terminal = dict(paths=[], process_running=False, errors=[], supported=True, searched_locations=['C:/'])
+    terminal[field] = value
+    payload = json.dumps({'terminal': terminal})
+    # Only the environment probe is faked; execute the actual PowerShell safety gate.
+    script = path / 'preflight-test.ps1'
+    script.write_text(". './deployment/ci.ps1' -Task metadata\n"
+                      "function Get-Process { }\n"
+                      "function Test-CandidateCLI { '" + payload + "' | ConvertFrom-Json }\n"
+                      "Assert-NoTerminal\n", encoding='utf-8')
+    result = subprocess.run([PWSH, '-NoProfile', '-File', str(script)], cwd=path, env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert (result.returncode == 0) is accepted, result.stderr

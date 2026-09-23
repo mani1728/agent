@@ -11,3 +11,12 @@ Configuration is split into a transport-neutral immutable contract and an infras
 `EnvironmentConfigurationProvider` is replaceable through the `ConfigurationProvider` protocol. Core does not read process environment. No credentials or secrets are stored in `AgentConfig`.
 
 v0.0.7 intentionally does not introduce YAML/TOML/JSON configuration files, registry access, remote configuration, Vault/secrets-manager integration, or production IAM configuration.
+
+## Logging (v0.1.2)
+
+`MT5_AGENT_LOG_LEVEL` accepts DEBUG, INFO (default), WARNING and ERROR,
+case-insensitively. Invalid levels produce the existing configuration error exit
+2 in normal mode; diagnostics report not-ready with exit 1.
+`MT5_AGENT_LOG_FILE` optionally appends UTF-8 logs to an existing parent directory.
+Opening/writing a log sink is best-effort and does not fail the runtime.
+Inspection-only diagnostics never create the file.

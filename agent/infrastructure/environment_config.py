@@ -1,7 +1,7 @@
 import os
 from collections.abc import Mapping
 
-from agent.contracts.configuration import AgentConfig, ConfigurationError, ConfigurationProvider, HTTPTransportConfig
+from agent.contracts.configuration import AgentConfig, ConfigurationError, ConfigurationProvider, HTTPTransportConfig, LoggingConfig
 
 
 class EnvironmentConfigurationProvider(ConfigurationProvider):
@@ -14,7 +14,9 @@ class EnvironmentConfigurationProvider(ConfigurationProvider):
         host = self._environ.get("MT5_AGENT_HTTP_HOST", "127.0.0.1")
         port = self._integer("MT5_AGENT_HTTP_PORT", 8080)
         max_request_bytes = self._integer("MT5_AGENT_HTTP_MAX_REQUEST_BYTES", 1024 * 1024)
-        return AgentConfig(HTTPTransportConfig(host, port, max_request_bytes))
+        log_level = self._environ.get("MT5_AGENT_LOG_LEVEL", "INFO").strip().upper()
+        log_file = self._environ.get("MT5_AGENT_LOG_FILE") or None
+        return AgentConfig(HTTPTransportConfig(host, port, max_request_bytes), LoggingConfig(log_level, log_file))
 
     def _integer(self, name: str, default: int) -> int:
         raw = self._environ.get(name)
