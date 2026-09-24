@@ -2,7 +2,7 @@
 
 | Product requirement | Architecture / ADR | Roadmap | GitLab issue family | Test evidence |
 | --- | --- | --- | --- | --- |
-| One safe unattended MT5 runtime | ADR-001 | B, H | #1, #14 | Controlled non-trading integration |
+| One safe unattended MT5 runtime | ADR-001 (provisional) | B, H | #1, #14 | Session 1 direct-worker probe passed; unattended-launch experiment pending |
 | Explicit/versioned allowlisted commands | Target Architecture | A | #2, #3 | Schema/negative compatibility |
 | No duplicate or expired trade | Target Architecture | C, G | #3, #4, #5, #14 | Crash/retry/TTL/ambiguity tests |
 | Large historical data safely | Target Architecture | D, E | #7, #8, #9 | UTC, bounded-memory, integrity/resume |

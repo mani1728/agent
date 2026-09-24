@@ -18,7 +18,7 @@ heartbeat شامل version/uptime/lifecycle، MT5/transport/spool، queue age/by
 
 ## Windows Service و Session 0 — مسدود
 
-Agent باید بعد از boot unattended شود، اما Pipeline #16 نشان داده Runner service در Session 0 است و MT5 Python IPC GUI-dependent است. direct service integration ادعا نمی‌شود. راه پیشنهادی برای آزمایش: service/control با broker session-bound و IPC authenticated؛ بدون desktop-interaction hack یا kill کردن `terminal64.exe`. تا experiment کنترل‌شده، تصمیم production مسدود است.
+Agent باید بعد از boot unattended شود، اما Runner service در Session 0 است و MT5 Python IPC GUI-dependent است. experiment کنترل‌شده در Session 1 با Worker مستقیم، `initialize`، `version`، `terminal_info` و presence-only `account_info` موفق بود؛ `shutdown` API نیز terminal را نکشت. این فقط viability interactive را اثبات می‌کند، نه boot/logon/locked/disconnected session یا launcher unattended. direct service integration ادعا نمی‌شود. راه بعدی: service/control با Worker session-bound و IPC authenticated، بدون desktop-interaction hack یا kill کردن `terminal64.exe`.
 
 ## Maintenance/quiesce — برنامه‌ریزی‌شده
 

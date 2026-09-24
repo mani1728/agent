@@ -4,7 +4,7 @@
 
 1. **v0.1.3 completion:** مستندات، evidence CI و protocol آزمایش Session 0.
 2. **Architecture approved:** threat model، identity و schemaها.
-3. **Runtime proven:** یک terminal و topology پشتیبانی‌شده در محیط demo.
+3. **Runtime proven:** Worker مستقیم در Session 1 با یک terminal مرجع موفق است؛ launcher unattended هنوز باید در محیط demo اثبات شود.
 4. **Durable/read/transfer:** SQLite state، read capability و bounded chunking.
 5. **Transport/observability:** Kafka، HTTPS/mTLS و support controls.
 6. **Execution/hardening:** execution sandbox، service/quiesce/recovery و v1.0.0 gate.
