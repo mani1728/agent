@@ -10,6 +10,7 @@ from agent.infrastructure.windows_worker_launcher import (
     ControlledWorkerLauncher,
     DiscoveredSession,
     WorkerSessionPolicy,
+    interactive_startup_info,
     select_worker_session,
 )
 
@@ -45,6 +46,10 @@ def test_session_selection_rejects_missing_or_wrong_local_principal_without_toke
     )
     with pytest.raises(RuntimeError, match="SESSION_PRINCIPAL_MISMATCH"):
         select_worker_session(policy, (wrong_principal,))
+
+
+def test_interactive_startup_targets_the_default_user_desktop():
+    assert interactive_startup_info().lpDesktop == r"winsta0\default"
 
 
 def test_session_zero_can_launch_owned_worker_in_designated_interactive_session():

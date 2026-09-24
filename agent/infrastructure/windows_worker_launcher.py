@@ -137,6 +137,18 @@ def select_worker_session(
     return matching[0]
 
 
+def interactive_startup_info() -> win32process.STARTUPINFO:
+    """Target the selected user's existing interactive desktop.
+
+    The launcher itself runs as a non-interactive LocalSystem service in
+    session 0.  A null ``lpDesktop`` would inherit that service desktop rather
+    than the desktop attached to the selected user's token.
+    """
+    startup = win32process.STARTUPINFO()
+    startup.lpDesktop = r"winsta0\default"
+    return startup
+
+
 class ControlledWorkerLauncher:
     def __init__(self, worker_entry: Path):
         self._entry = worker_entry.resolve()
@@ -188,24 +200,30 @@ class ControlledWorkerLauncher:
         except Exception as error:
             code = getattr(error, "winerror", None)
             raise RuntimeError(f"SESSION_TOKEN_UNAVAILABLE:{code!s}") from None
-        startup = win32process.STARTUPINFO()
+        startup = interactive_startup_info()
         command = f'"{sys.executable}" "{self._entry}"'
         try:
-            process_handle, _, pid, _ = win32process.CreateProcessAsUser(
-                token,
-                None,
-                command,
-                None,
-                None,
-                False,
-                win32con.CREATE_NO_WINDOW,
-                None,
-                str(self._entry.parent),
-                startup,
-            )
+            try:
+                process_handle, thread_handle, pid, _ = win32process.CreateProcessAsUser(
+                    token,
+                    None,
+                    command,
+                    None,
+                    None,
+                    False,
+                    win32con.CREATE_NO_WINDOW,
+                    None,
+                    str(self._entry.parent),
+                    startup,
+                )
+            finally:
+                # WTSQueryUserToken returns an owned handle; the child has its
+                # own token reference after CreateProcessAsUser returns.
+                token.Close()
         except Exception as error:
             code = getattr(error, "winerror", None)
             raise RuntimeError(f"WORKER_CREATE_PROCESS_FAILED:{code!s}") from None
+        thread_handle.Close()
         self._worker_handle = process_handle
         self._owned = OwnedWorker(
             pid,
