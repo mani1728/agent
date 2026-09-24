@@ -21,3 +21,7 @@ and position tickets. A command crossing point of no return can become terminal
 The v3 outbox retains JSON-canonical outbound messages until explicit acknowledgement.
 Sending merely records an attempt; restart may retransmit unacknowledged records.
 Ordering is deterministic per topic. No retention cleanup deletes unacknowledged data.
+
+## Historical transfer checkpoint — schema v4
+
+**Implemented:** v4 adds durable per-transfer partition checkpoints. Historical records are partitioned before adapter retrieval, serialized into deterministic SHA-256 checked chunks, and enqueued through the existing outbox. Restart resumes only after the saved partition; large dataset/real-MT5 scale validation remains **PENDING PRODUCTION VALIDATION**.

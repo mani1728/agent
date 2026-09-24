@@ -27,7 +27,7 @@ def test_crash_after_ponr_is_ambiguous_and_never_recovery_candidate(tmp_path):
 
 def test_schema_v1_migrates_without_losing_command(tmp_path):
     p=tmp_path/'v1.db'; c=sqlite3.connect(p); c.execute('CREATE TABLE commands (server_command_id TEXT PRIMARY KEY, command_identifier TEXT NOT NULL, command_version TEXT NOT NULL, received_at TEXT NOT NULL, expires_at TEXT, requested_priority TEXT NOT NULL, state TEXT NOT NULL, point_of_no_return INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)'); c.execute("INSERT INTO commands VALUES ('old','read','1',?,?,?,?,?,?,?)",(NOW.isoformat(),None,'normal','received',0,NOW.isoformat(),NOW.isoformat())); c.execute('PRAGMA user_version=1'); c.commit(); c.close()
-    s=SQLiteDurableCommandState(p); assert s.load('old').server_command_id == 'old'; assert s.connection.execute('PRAGMA user_version').fetchone()[0] == 3
+    s=SQLiteDurableCommandState(p); assert s.load('old').server_command_id == 'old'; assert s.connection.execute('PRAGMA user_version').fetchone()[0] == 4
 
 def test_outbox_requires_ack_and_retransmits_across_restart(tmp_path):
     p=tmp_path/'s.db'; s=SQLiteDurableCommandState(p); first=s.enqueue_outbox('result',{'z':1},'m1'); s.enqueue_outbox('result',{'a':2},'m2')

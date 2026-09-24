@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 from agent.contracts.lifecycle import CommandLifecycle, CommandState, RequestedPriority
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 class DurableStateError(RuntimeError): pass
 class DuplicateCommandError(DurableStateError): pass
 
@@ -19,7 +19,8 @@ class SQLiteDurableCommandState:
         if version > SCHEMA_VERSION: raise DurableStateError("unsupported schema version")
         if version == 0: self._create_v1(); version = 1
         if version == 1: self._migrate_v2(); version = 2
-        if version == 2: self._migrate_v3()
+        if version == 2: self._migrate_v3(); version = 3
+        if version == 3: self._migrate_v4()
     def _create_v1(self):
         with self.connection:
             self.connection.execute("CREATE TABLE commands (server_command_id TEXT PRIMARY KEY, command_identifier TEXT NOT NULL, command_version TEXT NOT NULL, received_at TEXT NOT NULL, expires_at TEXT, requested_priority TEXT NOT NULL, state TEXT NOT NULL, point_of_no_return INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
@@ -33,6 +34,10 @@ class SQLiteDurableCommandState:
         with self.connection:
             self.connection.execute("CREATE TABLE outbox (message_id TEXT PRIMARY KEY, topic TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, sequence INTEGER NOT NULL, sent_at TEXT, acknowledged_at TEXT, UNIQUE(topic, sequence))")
             self.connection.execute("PRAGMA user_version=3")
+    def _migrate_v4(self):
+        with self.connection:
+            self.connection.execute("CREATE TABLE historical_checkpoints (transfer_id TEXT PRIMARY KEY, partition_index INTEGER NOT NULL, updated_at TEXT NOT NULL)")
+            self.connection.execute("PRAGMA user_version=4")
     def close(self): self.connection.close()
     @staticmethod
     def _now(): return datetime.now(timezone.utc).isoformat()
@@ -93,3 +98,7 @@ class SQLiteDurableCommandState:
         with self.connection:self.connection.execute("UPDATE outbox SET acknowledged_at=? WHERE message_id=?",(self._now(),key))
     def resync_snapshot(self,agent_id,boot_id,protocol_version,capabilities):
         return {"agent_id":agent_id,"boot_id":boot_id,"protocol_version":protocol_version,"capabilities":capabilities,"pending_outbox":self.pending_outbox(),"unfinished_commands":tuple(x.server_command_id for x in self.recovery_candidates()),"ambiguous_executions":tuple(r[0] for r in self.connection.execute("SELECT server_command_id FROM commands WHERE state='ambiguous' ORDER BY server_command_id"))}
+    def save_history_checkpoint(self,transfer_id,partition_index):
+        with self.connection:self.connection.execute("INSERT INTO historical_checkpoints VALUES (?,?,?) ON CONFLICT(transfer_id) DO UPDATE SET partition_index=excluded.partition_index,updated_at=excluded.updated_at",(transfer_id,partition_index,self._now()))
+    def history_checkpoint(self,transfer_id):
+        row=self.connection.execute("SELECT partition_index FROM historical_checkpoints WHERE transfer_id=?",(transfer_id,)).fetchone(); return None if row is None else row[0]
