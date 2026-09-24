@@ -3,3 +3,4 @@ numpy==1.26.4
 Pillow
 pyinstaller
 pytest
+pywin32==312; sys_platform == "win32"
