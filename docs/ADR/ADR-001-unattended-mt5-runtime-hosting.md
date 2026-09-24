@@ -26,14 +26,19 @@ interpreter, captures PID/session/start metadata, and rejects a second active Wo
 It does not accept Server command lines or executable paths. This validates current-session
 process ownership only; service-to-interactive-session launch and boot/logon handling remain pending.
 
-The launcher also has a Windows token-based `CreateProcessAsUser` path for a caller-selected
+The launcher also has a Windows token-based `CreateProcessAsUser` path for a locally selected
 interactive session. Session selection is deliberately local control-plane policy, never Server input.
 The policy is the locally configured `MT5_AGENT_WORKER_PRINCIPAL`; discovery records the
 complete WTS inventory before selecting exactly one non-zero, active session belonging to
 that principal. Missing, mismatched, ambiguous, or token-unavailable sessions fail closed.
 **Decision context:** the control-plane service runs in Session 0, while the
 MetaTrader5 Python package communicates with a GUI-dependent terminal. Pipeline
-#16 proved Session 0 ownership evidence, not safe direct runtime integration.
+#39 verified local-principal matching and `WTSQueryUserToken` for the active
+Session 1 principal, but `CreateProcessAsUser` returned `ERROR_ACCESS_DENIED`.
+Pipeline #40 explicitly targeted `winsta0\\default` and returned the same error.
+No Window Station/Desktop DACL was changed: Microsoft documents that the selected
+user or logon session must have access to both objects. This remains a blocked
+Windows-security prerequisite, not evidence of a working unattended launcher.
 
 ## Decision
 
