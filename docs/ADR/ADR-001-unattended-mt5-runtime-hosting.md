@@ -28,6 +28,9 @@ process ownership only; service-to-interactive-session launch and boot/logon han
 
 The launcher also has a Windows token-based `CreateProcessAsUser` path for a caller-selected
 interactive session. Session selection is deliberately local control-plane policy, never Server input.
+The policy is the locally configured `MT5_AGENT_WORKER_PRINCIPAL`; discovery records the
+complete WTS inventory before selecting exactly one non-zero, active session belonging to
+that principal. Missing, mismatched, ambiguous, or token-unavailable sessions fail closed.
 **Decision context:** the control-plane service runs in Session 0, while the
 MetaTrader5 Python package communicates with a GUI-dependent terminal. Pipeline
 #16 proved Session 0 ownership evidence, not safe direct runtime integration.
