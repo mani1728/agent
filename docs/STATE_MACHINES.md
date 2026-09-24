@@ -7,6 +7,7 @@ must be durable/auditable where it changes execution safety.
 | --- | --- |
 | Agent | `STARTING → RUNNING → QUIESCING → QUIESCED → RESUMING → RUNNING`; `DEGRADED` may restrict readiness; `STOPPING → STOPPED`. Quiesced retains authenticated control/heartbeat. |
 | Command | `RECEIVED → VALIDATED → AUTHORIZED → ACCEPTED → EXECUTING → RESULT_OBTAINED → RESPONSE_PERSISTED → TRANSMITTED → ACKNOWLEDGED`; terminal alternatives: rejected, expired, cancelled, ambiguous. |
+| Command foundation | `CommandLifecycle` implements `RECEIVED → VALIDATED → QUEUED → RUNNING → SUCCEEDED/FAILED/AMBIGUOUS`, with expiry and pre-point-of-no-return cancellation. Authorization, durable acceptance and response states remain planned. |
 | Trade | `PREPARED → POINT_OF_NO_RETURN → SUBMITTED → CONFIRMED` or `AMBIGUOUS → RECONCILING → CONFIRMED/NOT_EXECUTED`. Ambiguous never automatically re-enters submitted. |
 | Bulk job | `QUEUED → RUNNING_PARTITION → CHECKPOINTED/PAUSED → RUNNING_PARTITION → COMPLETED`; cancellation/preemption happens only at safe partition boundaries. |
 | MT5 Runtime | `UNAVAILABLE → DISCOVERED → INITIALIZING → READY → DEGRADED/FAILED → SHUTTING_DOWN`. Session 1 direct-worker viability is verified; direct Session 0 and unattended launch remain prohibited/unproven. |

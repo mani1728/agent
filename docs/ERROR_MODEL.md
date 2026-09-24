@@ -23,3 +23,13 @@ timeout, transport, persistence, partial transfer, cancellation and internal
 errors. Where safe, MT5 `last_error`/trade retcode data will be preserved as
 bounded provider metadata, not collapsed into a boolean. This is a design
 requirement, not current runtime behavior; see [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).
+
+## Lifecycle error foundation (implemented in v0.1.3)
+
+`StructuredError` provides an immutable, serializable safe error contract with a
+stable code, domain, UTC timestamp, retryability and ambiguity as separate flags,
+optional command/execution IDs and bounded safe details. `CommandLifecycle`
+models received, validated, queued, running, terminal and ambiguous states;
+expiry prevents a queued command from entering running, and cancellation never
+undoes work beyond its point of no return. No scheduler, durable storage or trade
+execution is introduced by these contracts.
