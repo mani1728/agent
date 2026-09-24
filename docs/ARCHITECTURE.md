@@ -1,4 +1,12 @@
-# Architecture — v0.1.2 development
+# Current Architecture — v0.1.3 development
+
+## Status boundary
+
+This document describes the implemented package only. The approved product
+direction and proposed production boundaries are separately documented in
+[TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md); they are not implemented
+features. The Agent is an MT5 access/execution worker, never an AI, strategy,
+risk, capital-management, or autonomous trading-decision component.
 
 ## Agent Capability Discovery & Runtime Introspection Foundation
 

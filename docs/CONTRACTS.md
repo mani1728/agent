@@ -1,4 +1,4 @@
-# Contracts — v0.1.2 development
+# Contracts — v0.1.3 development
 
 ## CapabilityDescriptor
 
@@ -46,3 +46,11 @@ Responses continue to use `CommandResult` with versioned payload schemas.
 ## Compatibility
 
 Existing Command, Security, Transport, Observability, Configuration, and MT5Port contracts remain unchanged.
+
+## Planned contract evolution (not implemented)
+
+`CommandEnvelope`, response/error, transfer and capability schemas for remote
+server control remain design work. They must be versioned and separately
+approved before implementation; see [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).
+The current local HTTP request contract is not evidence of Kafka, persistence,
+trade execution, mTLS, or durable idempotency support.

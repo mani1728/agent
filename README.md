@@ -36,8 +36,10 @@ See [known issues](docs/KNOWN_ISSUES.md) for remaining limitations.
 
 This active runtime does not include trading/order execution, Kafka, Gateway,
 SQLite persistence, retry/circuit-breaker infrastructure, Windows Service hosting
-or file-based JSONC configuration. The historical runtime containing those
-modules is retained in Git history and is not merged into this package.
+or file-based JSONC configuration. It contains no AI, trading strategy, risk or
+capital-management decision logic: those belong exclusively to the server/control
+plane. The historical runtime containing ideas for those areas is retained in Git
+history and is not merged into this package.
 
 ## Layout
 
@@ -181,8 +183,9 @@ been retired; GitHub is a push mirror/archive only.
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) and [contracts](docs/CONTRACTS.md)
+- [Current architecture](docs/ARCHITECTURE.md), [target architecture](docs/TARGET_ARCHITECTURE.md), and [contracts](docs/CONTRACTS.md)
 - [Error model](docs/ERROR_MODEL.md) and [test strategy](docs/TEST_STRATEGY.md)
+- [Capability roadmap](docs/ROADMAP.md), [GitLab planning](docs/GITLAB_PLAN.md), and [Persian engineering wiki source](docs/wiki-fa/Home.md)
 - [Migration map](docs/MIGRATION.md) and [known issues](docs/KNOWN_ISSUES.md)
 - [Release checklist](deployment/RELEASE_CHECKLIST.md) and [changelog](CHANGELOG.md)
 

@@ -1,4 +1,4 @@
-# Test Strategy — v0.1.2 development
+# Test Strategy — v0.1.3 development
 
 ## Contract tests
 
@@ -68,3 +68,12 @@ Git repositories and inert binary fixtures to test tag/commit validation,
 no-MT5 confirmation, and packaging rejection of missing or mismatched evidence.
 These fixture tests never launch MT5 and do not substitute for executable smoke
 validation. They require Git and PowerShell 7; otherwise pytest reports skips.
+
+## Target testing gates — planned
+
+The production design adds schema/contract compatibility, persistence and crash
+recovery, idempotency, priority/fairness, transfer integrity and bounded-memory,
+transport, security/redaction, controlled Real-MT5, Windows-hosting, failure
+injection and release-acceptance layers. No test may submit a financially
+consequential real trade without explicit authorization and a safe environment.
+The detailed gate matrix is in [ROADMAP.md](ROADMAP.md).

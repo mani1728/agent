@@ -13,6 +13,15 @@
 Historical paths below refer to baseline
 `1a133e6c6ea1b02a039f45610182037d347390ba` and remain accessible with `git show`.
 
+## KI-008: Session 0 blocks a Real-MT5 runtime claim
+
+Pipeline #16 recorded that the MT5 runner service executes in Windows Session 0.
+The MetaTrader5 Python package uses terminal IPC, and no safe real-runtime test
+has demonstrated that this GUI-dependent path works from Session 0. The current
+probe is deliberately inspection-only; it does not start, stop, or kill any
+user-owned `terminal64.exe`. A production Windows-hosting decision is required
+before claiming unattended MT5 integration. See [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).
+
 ## KI-003: historical Worker is syntactically incomplete
 
 `Version 1_0_0/agent/core/worker.py` ends inside a string literal at line 981 in

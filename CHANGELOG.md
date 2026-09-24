@@ -16,6 +16,10 @@ revalidated here, so no publication dates are inferred from commit timestamps.
   and data environment; it never starts or terminates MT5.
 - Added retained MT5-runner session and process-ownership probe evidence before any
   future controlled terminal or Agent runtime attempt.
+- Documented the product boundary, target architecture, dependency-aware roadmap,
+  GitLab planning package and Persian Wiki source. These are planning artifacts;
+  they do not add Kafka, SQLite, trading, mTLS, service hosting, or remote-command
+  execution.
 
 ## [0.1.2] — Diagnostics, lifecycle logging, and dual-runner CI foundation
 
