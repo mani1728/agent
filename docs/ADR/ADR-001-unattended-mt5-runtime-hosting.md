@@ -10,6 +10,14 @@ health, and controlled shutdown. It tracks worker instance/PID/session/account/s
 rejects invalid tokens, versions, duplicate requests, and unknown operations, and has a
 single-worker lease. It is intentionally transport-agnostic: Windows launcher, Named Pipe
 ACLs, boot/logon/lock/disconnect validation and ownership-safe MT5 termination remain pending.
+
+## Windows-native IPC (implemented; lifecycle validation pending)
+
+The control/Worker boundary uses a Windows Named Pipe. Its security descriptor contains
+an allow DACL for the current Windows user, in addition to protocol token validation.
+The pipe carries bounded JSON messages only; it cannot launch arbitrary programs or
+invoke arbitrary MT5/Python functions. Cross-session service-to-worker ACL deployment
+and lifecycle evidence remain pending before an ADR acceptance decision.
 **Decision context:** the control-plane service runs in Session 0, while the
 MetaTrader5 Python package communicates with a GUI-dependent terminal. Pipeline
 #16 proved Session 0 ownership evidence, not safe direct runtime integration.
