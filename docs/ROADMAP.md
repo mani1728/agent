@@ -29,3 +29,7 @@ service hardening and commercial enrollment.
 Each implementation issue must trace Product Requirement → capability phase →
 acceptance tests → documentation. Security/operations/docs are mandatory fields,
 not a closing task.
+# Scheduler status
+
+**IMPLEMENTED (foundation):** bounded local admission and deterministic effective-priority selection with FIFO tie breaking and cooperative cancellation exclusion. It is deliberately not an MT5 executor and introduces no parallel terminal calls. Durable queue persistence and production load validation remain **PLANNED / PENDING PRODUCTION VALIDATION**.
+
