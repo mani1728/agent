@@ -37,3 +37,12 @@ def test_outbox_requires_ack_and_retransmits_across_restart(tmp_path):
 def test_resync_reports_only_persisted_obligations(tmp_path):
     s=SQLiteDurableCommandState(tmp_path/'s.db'); running(s); s.mark_point_of_no_return('cmd'); s.mark_ambiguous_after_ponr('cmd'); s.enqueue_outbox('ack',{'command':'cmd'},'a')
     snapshot=s.resync_snapshot('agent','boot','1',[]); assert snapshot['ambiguous_executions'] == ('cmd',) and snapshot['pending_outbox'][0]['message_id'] == 'a'
+
+def test_delivery_attempt_does_not_acknowledge_or_create_work(tmp_path):
+    from agent.application.outbox import DurableOutboxDelivery
+    class Transport:
+        def __init__(self): self.sent=[]
+        def send(self,message): self.sent.append(message['message_id'])
+    s=SQLiteDurableCommandState(tmp_path/'s.db'); s.enqueue_outbox('result',{'safe':True},'m'); t=Transport()
+    assert DurableOutboxDelivery(s,t).deliver_pending() == ('m',)
+    assert t.sent == ['m'] and [m['message_id'] for m in s.pending_outbox()] == ['m']
