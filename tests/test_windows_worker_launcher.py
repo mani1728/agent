@@ -15,6 +15,7 @@ from agent.infrastructure.windows_worker_launcher import (
     ControlledWorkerLauncher,
     DiscoveredSession,
     WorkerSessionPolicy,
+    discover_sessions,
     interactive_startup_info,
     select_worker_session,
 )
