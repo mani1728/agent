@@ -29,6 +29,11 @@ revalidated here, so no publication dates are inferred from commit timestamps.
   structured-error contracts; no execution or scheduler behavior is added.
 - SQLite durable-command-state foundation with schema versioning, WAL, unique
   command identity and recovery queries; no outbox, cleanup or execution replay.
+- Durable idempotency/correlation/reconciliation foundation: one execution identity
+  per server command, explicit post-point-of-no-return ambiguity and no blind replay.
+- Durable outbox with send-attempt versus acknowledgement semantics and resync snapshots.
+- First pure-READ MT5 slice: terminal information, terminal version, and account
+  information through explicit, typed allowlisted adapter calls only.
 
 ## [0.1.2] — Diagnostics, lifecycle logging, and dual-runner CI foundation
 

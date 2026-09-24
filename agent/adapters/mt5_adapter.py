@@ -53,3 +53,25 @@ class MT5Adapter:
         except Exception:
             safe_log(self._logger, logging.ERROR, "MT5 health probe failed")
             return False
+
+    @staticmethod
+    def _normalise(value):
+        """Stable, owned wire representation; no arbitrary object stringification."""
+        if value is None or isinstance(value, (str, int, float, bool)): return value
+        if hasattr(value, "_asdict"): return {str(k): MT5Adapter._normalise(v) for k, v in value._asdict().items()}
+        if isinstance(value, (tuple, list)): return [MT5Adapter._normalise(v) for v in value]
+        if isinstance(value, dict): return {str(k): MT5Adapter._normalise(v) for k, v in value.items()}
+        raise TypeError("unsupported MT5 response type")
+    def _read(self, name, *args):
+        if self._module is None: self._module = importlib.import_module("MetaTrader5")
+        try:
+            value=getattr(self._module, name)(*args)  # name is private allowlisted by methods below
+        except Exception as exc: raise MT5ReadError("MT5_CALL_FAILED", {"operation":name}) from exc
+        if value is None: raise MT5ReadError("MT5_READ_FAILED", {"operation":name,"last_error":self._normalise(self._module.last_error())})
+        return self._normalise(value)
+    def terminal_information(self): return self._read("terminal_info")
+    def terminal_version(self): return self._read("version")
+    def account_information(self): return self._read("account_info")
+
+class MT5ReadError(RuntimeError):
+    def __init__(self, code, details): super().__init__(code); self.code=code; self.details=details

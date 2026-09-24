@@ -10,6 +10,7 @@ GET_HEALTH = "agent.get_health"
 def build_dispatcher(
     agent,
     capability_provider: CapabilityProviderPort | None = None,
+    mt5_read_adapter=None,
 ) -> CommandDispatcher:
     dispatcher = CommandDispatcher()
 
@@ -22,6 +23,10 @@ def build_dispatcher(
 
     dispatcher.register(GET_STATUS, status_handler, capability_class=CapabilityClass.READ)
     dispatcher.register(GET_HEALTH, health_handler, capability_class=CapabilityClass.READ)
+    if mt5_read_adapter is not None:
+        from agent.application.mt5_read_commands import build_mt5_read_handlers
+        for name, handler in build_mt5_read_handlers(mt5_read_adapter).items():
+            dispatcher.register(name, handler, capability_class=CapabilityClass.READ)
 
     if capability_provider is not None:
         dispatcher.register_capability_handlers(capability_provider)

@@ -49,7 +49,7 @@ def compose_agent(
             capabilities=capability_registry.get_capabilities(),
         ),
     )
-    dispatcher = build_dispatcher(agent, capability_provider=capability_registry)
+    dispatcher = build_dispatcher(agent, capability_provider=capability_registry, mt5_read_adapter=agent.mt5)
 
     application = ApplicationBoundary(dispatcher, authenticator, authorizer, observability)
     transport = HTTPTransportAdapter(application, max_request_bytes=config.http.max_request_bytes)
