@@ -17,3 +17,11 @@ ApplicationPort
 `HTTPTransportAdapter` remains responsible for protocol translation, request-size enforcement, endpoint behavior, response serialization, and deterministic HTTP mapping. `HTTPServerHost` owns blocking `serve_forever()`, graceful `shutdown()`, and socket closure.
 
 No HTTP type is introduced into `HostingPort`, ApplicationHost, Core, or domain contracts. Security ordering and identity propagation remain unchanged.
+
+## Work Item #13 — secure transport foundation
+
+**IMPLEMENTED:** Kafka producer and HTTPS mTLS adapter boundaries accept configured
+clients only and deliver already-durable outbox records. mTLS material must exist before
+client construction; paths and secrets are never logged. Send is not acknowledgement.
+**PENDING PRODUCTION VALIDATION:** real Kafka broker, certificate issuance/rotation,
+server authentication, outage and load behavior.
