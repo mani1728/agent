@@ -30,7 +30,7 @@ class ControlledWorkerLauncher:
         current=[]
         for item in win32ts.WTSEnumerateSessions(None,1,0):
             session_id,_,state=item
-            if state==win32ts.WTSActive: current.append(session_id)
+            if session_id != 0 and state==win32ts.WTSActive: current.append(session_id)
         if len(current)!=1: raise RuntimeError('INTERACTIVE_SESSION_NOT_DETERMINISTIC')
         return current[0]
     def owned(self): return self._owned
