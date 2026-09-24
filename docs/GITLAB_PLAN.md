@@ -1,8 +1,8 @@
 # GitLab Planning Package
 
-**Status:** ready for authenticated GitLab application. No remote objects were
-created: this environment can fetch `origin/develop`, but anonymous GitLab API
-project lookup returns 404 and no credential/tool connection is available.
+**Status:** planning baseline. The GitLab issues, labels, milestones, board lists
+and Wiki pages are applied through authenticated GitLab access; this file remains
+the version-controlled traceability source.
 
 ## Proposed labels and workflow
 
@@ -34,3 +34,21 @@ Every issue description must include purpose, context, scope, non-goals,
 dependencies, acceptance criteria, tests, security/operational/documentation
 impact and a link to its roadmap phase. Parent/child work items can express the
 phase hierarchy if supported; otherwise use issue links and the dependency table.
+
+## Applied GitLab planning state
+
+The authenticated project now has the taxonomy above, six capability-gate
+milestones, and work items `#1`–`#16`. The `Development` board has lists for
+`status::planned`, `status::ready`, `status::in-progress`, `status::blocked`,
+`status::validation`, and `status::done`. Native issue blocking links are not
+available under this GitLab license (HTTP 403); the dependency graph below and
+[TRACEABILITY.md](TRACEABILITY.md) are the authoritative workaround.
+
+```text
+#1 runtime ADR ───────────────┐
+#2 protocol/manifest → #3 lifecycle/errors → #4 SQLite → #5 idempotency → #14 execution
+                    └────────────────────────→ #7 read → #8 transfer ───────┐
+#4 SQLite → #6 outbox/resync ────────────────────────────────────────────────┤
+#12 identity/authz → #11 config and #13 transport ───────────────────────────┤
+                                                                    → #16 readiness
+```

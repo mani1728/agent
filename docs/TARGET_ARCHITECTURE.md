@@ -45,6 +45,42 @@ orchestration.
 | Quiesce | States `RUNNING → QUIESCING → QUIESCED → RESUMING`, plus degraded/stopping. A minimal authenticated control/heartbeat channel remains alive while quiesced. | Policy for in-flight trades/transfer cancellation and restart recovery requires approval before behavior exists. |
 | Logging | Structured local JSON logs with allowlisted fields, recursive redaction, rotation/retention/max-disk and support bundles. Server telemetry is curated separately. | Never ship raw support logs by default. |
 
+## Product-owner decisions — decided, not implemented
+
+The following supersede the earlier open-decision wording. Commands are explicit,
+allowlisted product commands—not arbitrary Python or MT5 function names. Unknown
+operations and unknown command versions fail closed with
+`UNSUPPORTED_COMMAND`/`UNSUPPORTED_COMMAND_VERSION`. Handshake/resync publishes
+a capability manifest containing Agent/protocol versions, commands and versions,
+capability classes, and enabled/disabled state.
+
+Capability authorization is both class- and command-level. Classes are `READ`,
+`LOCAL_STATE`, `TRADE_ANALYSIS`, `TRADE_EXECUTION`, and future
+`CHART_TERMINAL`; class permission never replaces individual-command validation.
+Server-requested priority is constrained by local policy into `CRITICAL`, `HIGH`,
+`NORMAL`, `LOW`, or `BULK`; bounded queues, aging and fairness apply. Retrieval
+partition size and network chunk size are independent policies.
+
+SQLite is the local durable correlation/recovery authority, mapping server command
+to Agent execution, available MT5 request identifier, orders/deals/positions and
+secondary short trace token. MT5 comments are never the authority. Retention is
+configurable, but cleanup must not permit a duplicate trade: uncertain/unsafe
+records remain protected or require reconciliation.
+
+Commands have durable TTL/`expires_at` state; per-command expiration overrides
+policy defaults and an expired command never executes after retry/restart.
+Cancellation is lifecycle-aware and is not undo: after a trade point-of-no-return,
+a new explicit command is required to reverse any effect. An uncertain `order_send`
+result is `EXECUTION_AMBIGUOUS`; timeout, lost response or crash never authorizes
+blind replay. Reconciliation uses observed MT5/broker orders, deals, positions and
+history as authority for market state.
+
+Remote configuration is versioned, authenticated, policy/compatibility validated,
+durably staged, atomically applied, health checked and rolled back to last known
+good state. Bootstrap trust/security anchors are `LOCAL_ONLY`; operational values
+are `SERVER_MANAGED` or `SERVER_MANAGED_WITH_LIMITS`. Remote configuration cannot
+cross local security boundaries.
+
 ## MT5 data and execution semantics
 
 The official Python integration exposes terminal/account/symbol/tick/bar/order,
@@ -81,10 +117,10 @@ truncate an arbitrary global ID.
 
 The current pipeline #16 is reported as 9/9 passed with 133 local/unit tests and
 the stated v0.1.3 artifact checksum. This document does not independently prove
-artifact download or a live real-MT5 execution. Required product-owner decisions:
-supported unattended MT5 topology after the Session 0 experiment; authority and
-retention policy for execution records; initial read capability allowlist; and
-trade-command authorization/correlation-comment policy.
+artifact download or a live real-MT5 execution. The remaining implementation
+questions are the tested Windows topology, exact schemas/limits, supported
+initial command inventory and operational retention values—not the safety
+invariants above.
 
 Sources: [MQL5 Python API](https://www.mql5.com/en/docs/python_metatrader5),
 [copy_rates_range semantics](https://www.mql5.com/en/docs/python_metatrader5/mt5copyratesrange_py).

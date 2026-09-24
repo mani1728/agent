@@ -23,6 +23,8 @@ MT5 Agent: validate, execute, retrieve, persist, report, recover
 - [نقشه‌راه و فرایند انتشار](Roadmap.md)
 - [واژه‌نامه و عیب‌یابی](Reference.md)
 
+جزئیات state machineها در [STATE_MACHINES](../STATE_MACHINES.md) و traceability در [TRACEABILITY](../TRACEABILITY.md) نگهداری می‌شود.
+
 ## وضعیت فعلی v0.1.3
 
 **پیاده‌سازی‌شده:** lifecycle محلی MT5، HTTP/JSON `POST /command`، ترتیب Validation → Authentication → Authorization → Dispatch، diagnostics و logging محدود، capability discovery و CI چندمرحله‌ای. **پیاده‌سازی‌نشده:** Kafka، Gateway/mTLS، SQLite spooler، اجرای معامله، اولویت‌بندی، Windows Service و دستورهای راه‌دور production. مرجع دقیق: [README](../../README.md)، [معماری هدف](../TARGET_ARCHITECTURE.md) و [نقشه‌راه](../ROADMAP.md).

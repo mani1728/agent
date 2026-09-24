@@ -77,3 +77,9 @@ transport, security/redaction, controlled Real-MT5, Windows-hosting, failure
 injection and release-acceptance layers. No test may submit a financially
 consequential real trade without explicit authorization and a safe environment.
 The detailed gate matrix is in [ROADMAP.md](ROADMAP.md).
+
+Mandatory safety scenarios before any execution capability include duplicate
+delivery, identical command retry, expired trade, cancellation before/after the
+point of no return, lost response after submission, crash after submission,
+ambiguous restart and reconciliation disagreement. These tests use fakes or a
+controlled demo environment only; CI never performs a real-money trade.

@@ -15,6 +15,8 @@
 
 GitLab source of truth و GitHub mirror/archive است. pipeline: `validate → test → build → smoke → package`. runnerهای Windows شامل general، no-MT5 و reference-MT5 هستند. smoke terminal-available و runtime probe فقط inspection هستند و terminal را start/stop نمی‌کنند. Pipeline #16 به‌صورت گزارش‌شده 9/9 passed است؛ این به‌تنهایی proof اجرای Real-MT5 در Session 0 نیست.
 
+ADR/experiment اول: [Unattended MT5 Runtime Hosting](../ADR/ADR-001-unattended-mt5-runtime-hosting.md). این experiment فقط demo/non-trading است و process/session ownership، `initialize`، `terminal_info` و IPC concept را می‌سنجد.
+
 ## Testing strategy و release
 
 لایه‌ها: unit، contract/schema، property/edge، persistence، transport، security، integration، controlled Real-MT5، Windows hosting، crash/restart، large transfer، idempotency، priority/failure injection و release acceptance. تست معامله فقط با approval صریح و محیط demo/safe؛ هرگز معاملهٔ مالی واقعی نه. مسیر release: GitLab `develop → staging → main` پس از review است؛ GitHub مستقیم تغییر نمی‌کند.

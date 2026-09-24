@@ -8,6 +8,8 @@ Installation ID به‌طور تصادفی هنگام provision ساخته می�
 
 mTLS و rotation/revocation certificate، ACL deny-by-default، replay resistance، payload/decompression bound، secrets OS-protected و recursive redaction لازم‌اند. secret، password، token، private key یا raw credential نه در source/CI و نه در log/telemetry ثبت نمی‌شود.
 
+remote configuration سه قلمرو دارد: `LOCAL_ONLY` برای trust root و anchor امنیتی، `SERVER_MANAGED` برای operation و `SERVER_MANAGED_WITH_LIMITS` برای مقادیر bounded مانند chunk/retention. candidate باید authenticate/authorize/schema/policy/compatibility validate، durable stage، atomic apply، health-check و در failure rollback به last-known-good شود. config معمولی هرگز مرز local security را بازنویسی نمی‌کند.
+
 ## Logging و observability
 
 v0.1.3 logging lifecycle محدود دارد. هدف production: local structured JSON با timestamp/severity/agent/correlation/command/transfer/state/duration/error category، rotation/retention/max disk و support bundle redacted. server telemetry از local logs جداست.

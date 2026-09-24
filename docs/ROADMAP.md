@@ -6,7 +6,7 @@ means repository evidence, not a future promise.
 | Phase / status | Objective and prerequisites | Deliverables and acceptance evidence |
 | --- | --- | --- |
 | Current v0.1.3 — partial | Finish the existing lifecycle/HTTP/diagnostic/CI foundation. Prerequisite: none. | **Ready now:** correct version/status documentation, contract/error-model terminology, CI evidence retention and a controlled Session 0 experiment plan. Acceptance: existing tests plus documentation review; no live MT5 launch. |
-| A: decisions and contracts — planned | Approve service topology, threat model, identity lifecycle and capability taxonomy. | Versioning policy, envelope/error/transfer schemas, ACL policy and architecture decision records. Schema/property/negative tests; security review. |
+| A: decisions and contracts — decided/planned | Product-owner safety, capability classes, TTL, correlation and config boundaries are decided; service topology still needs evidence. | Versioning policy, envelope/error/transfer schemas, capability manifest, ACL policy and architecture decision records. Schema/property/negative tests; security review. |
 | B: controlled runtime integration — blocked | Demonstrate a supported one-terminal MT5 topology outside unsafe Session 0 assumptions. | Isolated demo account experiment, ownership-safe start/stop rules, readiness semantics. Controlled integration tests; no financial trade. |
 | C: durable command core — planned | A and B. | SQLite WAL migrations, command state machine, idempotency/outbox/recovery/quota model. Crash/disk-full/corruption/failure-injection tests. |
 | D: read capabilities — planned | A–C. | Allowlisted terminal/account/symbol/history operations and safe MT5 result normalization. Contract, UTC/history-limit and mock/Real-MT5 read tests. |
@@ -18,11 +18,11 @@ means repository evidence, not a future promise.
 
 ## v0.1.3 completion proposal
 
-**Ready now:** consolidate docs, preserve CI/probe ownership evidence, reconcile
-current version labels, and write a controlled real-MT5/session-topology test
-protocol. **Ready after a small prerequisite:** contract-design ADRs after
-product-owner review. **Requires architecture decision:** any durable command,
-identity, service/MT5 or execution behavior. **Defer:** Kafka, spooler, mTLS,
+**Ready now:** consolidate approved decisions, preserve CI/probe ownership
+evidence, reconcile current version labels, and write a controlled
+real-MT5/session-topology test protocol. **Ready after a small prerequisite:**
+contract-design ADRs and capability schemas. **Requires experiment evidence:**
+service/MT5 topology. **Defer:** Kafka, spooler, mTLS,
 priority engine, large transfer and execution code. **Future/v1.0.0:** production
 service hardening and commercial enrollment.
 

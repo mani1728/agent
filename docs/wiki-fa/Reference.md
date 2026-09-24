@@ -10,6 +10,8 @@
 | Outbox | نتیجهٔ durable منتظر ارسال. |
 | Liveness / Readiness | alive بودن process / آمادگی امن برای کار. |
 | Quiesced | توقف کار عادی با control/heartbeat محدود فعال. |
+| EXECUTION_AMBIGUOUS | نتیجهٔ trade نامعلوم است؛ retry خودکار ممنوع و reconciliation لازم است. |
+| Capability Manifest | inventory versioned از commandها و capabilityهای مجاز Agent. |
 
 ## Configuration فعلی
 
