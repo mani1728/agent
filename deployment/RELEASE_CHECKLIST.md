@@ -1,5 +1,12 @@
 # Release checklist
 
+## Work Item #15 update trust policy
+
+An update candidate must have a trusted signer identity and exact SHA-256 integrity
+match before staging. It becomes last-known-good only after a health gate. This repository
+does not download, execute, or roll back an updater; package signing, rollout and end-to-end
+rollback remain **PENDING PRODUCTION VALIDATION**.
+
 Start a fresh unchecked checklist for every candidate. This template is not a
 record of a completed release. Historical release facts are in ../CHANGELOG.md.
 
