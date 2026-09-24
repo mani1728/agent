@@ -4,6 +4,7 @@ import os, subprocess, sys, ctypes
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import win32con, win32process, win32ts
 @dataclass(frozen=True)
 class OwnedWorker:
     pid:int; session_id:int; started_at:str; entry_point:str
@@ -17,6 +18,13 @@ class ControlledWorkerLauncher:
         if not ctypes.windll.kernel32.ProcessIdToSessionId(self._process.pid,ctypes.byref(value)): raise OSError('cannot determine worker session')
         session=value.value
         self._owned=OwnedWorker(self._process.pid,session,datetime.now(timezone.utc).isoformat(),str(self._entry)); return self._owned
+    def start_in_interactive_session(self,session_id:int):
+        """Uses a Windows user token; target session is caller-selected, never Server input."""
+        if self._process is not None and self._process.poll() is None: raise RuntimeError('WORKER_ALREADY_RUNNING')
+        token=win32ts.WTSQueryUserToken(session_id)
+        startup=win32process.STARTUPINFO(); command=f'"{sys.executable}" "{self._entry}"'
+        _,_,pid,_=win32process.CreateProcessAsUser(token,None,command,None,None,False,win32con.CREATE_NO_WINDOW,None,str(self._entry.parent),startup)
+        self._owned=OwnedWorker(pid,session_id,datetime.now(timezone.utc).isoformat(),str(self._entry)); return self._owned
     def owned(self): return self._owned
     def stop(self):
         if self._process is None or self._process.poll() is not None: return False

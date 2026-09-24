@@ -25,6 +25,9 @@ The launcher starts only a repository-owned Worker entry point with the active P
 interpreter, captures PID/session/start metadata, and rejects a second active Worker.
 It does not accept Server command lines or executable paths. This validates current-session
 process ownership only; service-to-interactive-session launch and boot/logon handling remain pending.
+
+The launcher also has a Windows token-based `CreateProcessAsUser` path for a caller-selected
+interactive session. Session selection is deliberately local control-plane policy, never Server input.
 **Decision context:** the control-plane service runs in Session 0, while the
 MetaTrader5 Python package communicates with a GUI-dependent terminal. Pipeline
 #16 proved Session 0 ownership evidence, not safe direct runtime integration.
