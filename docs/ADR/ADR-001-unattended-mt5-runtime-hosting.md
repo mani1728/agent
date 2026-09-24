@@ -18,6 +18,13 @@ an allow DACL for the current Windows user, in addition to protocol token valida
 The pipe carries bounded JSON messages only; it cannot launch arbitrary programs or
 invoke arbitrary MT5/Python functions. Cross-session service-to-worker ACL deployment
 and lifecycle evidence remain pending before an ADR acceptance decision.
+
+## Controlled Worker launcher (implemented; unattended lifecycle pending)
+
+The launcher starts only a repository-owned Worker entry point with the active Python
+interpreter, captures PID/session/start metadata, and rejects a second active Worker.
+It does not accept Server command lines or executable paths. This validates current-session
+process ownership only; service-to-interactive-session launch and boot/logon handling remain pending.
 **Decision context:** the control-plane service runs in Session 0, while the
 MetaTrader5 Python package communicates with a GUI-dependent terminal. Pipeline
 #16 proved Session 0 ownership evidence, not safe direct runtime integration.
