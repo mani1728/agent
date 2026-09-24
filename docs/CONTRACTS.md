@@ -54,3 +54,19 @@ server control remain design work. They must be versioned and separately
 approved before implementation; see [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).
 The current local HTTP request contract is not evidence of Kafka, persistence,
 trade execution, mTLS, or durable idempotency support.
+
+## Versioned protocol and capability manifest (implemented in v0.1.3)
+
+`ProtocolVersion`, `CapabilityClass`, `CommandDefinition`, `CommandRegistry` and
+`CapabilityManifest` form the local allowlisted protocol authority. Each command
+has one registered identifier/version/class; duplicate registration is rejected.
+Server input can only resolve a registered command/version. Unknown commands,
+unknown versions, disabled classes and disabled commands fail closed with stable
+codes `UNSUPPORTED_COMMAND`, `UNSUPPORTED_COMMAND_VERSION`,
+`CAPABILITY_DISABLED` and `COMMAND_DISABLED`.
+
+The manifest is deterministically generated from that registry and reports Agent
+version, protocol version, command identifier/version, class and current enabled
+state. It exposes only registered, current commands; it does not advertise future
+MT5 capabilities. `agent.get_capability_manifest` is available when capability
+discovery is composed.

@@ -84,6 +84,8 @@ class HTTPTransportAdapter:
         return {"invalid_request": 400, "invalid_command": 400, "unsupported_schema": 400,
                 "authentication_failed": 401, "authorization_denied": 403, "authorization_failed": 500,
                 "unknown_command": 404, "execution_failed": 500, "application_error": 500,
+                "UNSUPPORTED_COMMAND": 404, "UNSUPPORTED_COMMAND_VERSION": 400,
+                "CAPABILITY_DISABLED": 403, "COMMAND_DISABLED": 403,
                 "transport_error": 500}.get(response.code, 500)
 
     def handle_json(self, body: bytes) -> HTTPResponse:

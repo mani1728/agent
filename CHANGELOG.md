@@ -21,6 +21,11 @@ revalidated here, so no publication dates are inferred from commit timestamps.
   they do not add Kafka, SQLite, trading, mTLS, service hosting, or remote-command
   execution.
 
+### Added
+
+- Versioned local command registry, capability classes and deterministic capability
+  manifest with fail-closed command/version and enablement validation.
+
 ## [0.1.2] — Diagnostics, lifecycle logging, and dual-runner CI foundation
 
 ### Added

@@ -153,7 +153,7 @@ def test_observer_failure_does_not_fail_valid_execution():
 def test_invalid_command_is_mapped_as_application_error():
     response = HTTPTransportAdapter(ApplicationBoundary(CommandDispatcher())).handle_json(json.dumps(payload(command_type="does.not.exist")).encode())
     assert response.status == 404
-    assert json.loads(response.body)["code"] == "unknown_command"
+    assert json.loads(response.body)["code"] == "UNSUPPORTED_COMMAND"
 
 
 def test_invalid_command_schema_is_mapped_as_bad_request():
@@ -161,7 +161,7 @@ def test_invalid_command_schema_is_mapped_as_bad_request():
     value = payload(); value["command"]["schema_version"] = "999"
     response = HTTPTransportAdapter(ApplicationBoundary(dispatcher)).handle_json(json.dumps(value).encode())
     assert response.status == 400
-    assert json.loads(response.body)["code"] == "unsupported_schema"
+    assert json.loads(response.body)["code"] == "UNSUPPORTED_COMMAND_VERSION"
 
 
 def test_http_server_can_be_created_without_external_service():

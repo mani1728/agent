@@ -88,7 +88,7 @@ def test_discovery_returns_provider_data_and_preserves_command_identity(command_
 def test_discovery_is_not_registered_without_provider(command_type):
     result = build_dispatcher(object()).dispatch(make_command(command_type))
     assert not result.success
-    assert result.code == "unknown_command"
+    assert result.code == "UNSUPPORTED_COMMAND"
 
 
 def test_registry_copies_capabilities_and_returns_runtime_snapshot():
@@ -160,7 +160,7 @@ def test_discovery_rejects_unsupported_schema():
     dispatcher = build_dispatcher(object(), capability_provider=FakeCapabilityProvider())
     result = dispatcher.dispatch(replace(make_command(GET_CAPABILITIES), schema_version="999"))
     assert not result.success
-    assert result.code == "unsupported_schema"
+    assert result.code == "UNSUPPORTED_COMMAND_VERSION"
 
 
 @pytest.mark.parametrize("field", ["name", "version", "schema_version"])

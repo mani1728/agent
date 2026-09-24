@@ -81,6 +81,12 @@ good state. Bootstrap trust/security anchors are `LOCAL_ONLY`; operational value
 are `SERVER_MANAGED` or `SERVER_MANAGED_WITH_LIMITS`. Remote configuration cannot
 cross local security boundaries.
 
+## Implemented protocol foundation
+
+The local versioned command registry and capability manifest are implemented.
+They establish allowlisting and local enablement only; remote negotiation,
+entitlements, durable lifecycle and command execution remain later work.
+
 ## MT5 data and execution semantics
 
 The official Python integration exposes terminal/account/symbol/tick/bar/order,
