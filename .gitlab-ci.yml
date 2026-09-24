@@ -21,9 +21,8 @@ variables:
   MT5_SMOKE_RUNNER_TAG: 'windows-self-hosted-no-mt5'
   MT5_AVAILABLE_RUNNER_TAG: 'windows-self-hosted-mt5'
   PYTHON_EXECUTABLE: 'python'
-  # Local runner policy, not a Server-provided session identifier. The launcher
-  # requires an active WTS session for this exact principal and fails closed.
-  MT5_AGENT_WORKER_PRINCIPAL: 'MANI-PC\Administrator'
+  # MT5_AGENT_WORKER_PRINCIPAL is local Runner policy and is intentionally not
+  # defined here. Each Runner host must configure its designated principal locally.
   PIP_DISABLE_PIP_VERSION_CHECK: '1'
   PIP_NO_INPUT: '1'
   GIT_DEPTH: '1'
