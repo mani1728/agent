@@ -2,6 +2,14 @@
 
 **Status:** provisional; interactive-session viability demonstrated, unattended
 launch mechanism not yet demonstrated.
+
+## Runtime foundation (implemented, pending Windows lifecycle validation)
+
+A versioned, authenticated, allowlisted Worker protocol now supports only handshake,
+health, and controlled shutdown. It tracks worker instance/PID/session/account/start time,
+rejects invalid tokens, versions, duplicate requests, and unknown operations, and has a
+single-worker lease. It is intentionally transport-agnostic: Windows launcher, Named Pipe
+ACLs, boot/logon/lock/disconnect validation and ownership-safe MT5 termination remain pending.
 **Decision context:** the control-plane service runs in Session 0, while the
 MetaTrader5 Python package communicates with a GUI-dependent terminal. Pipeline
 #16 proved Session 0 ownership evidence, not safe direct runtime integration.
