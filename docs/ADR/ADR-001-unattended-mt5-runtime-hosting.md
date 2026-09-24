@@ -1,6 +1,6 @@
 # ADR-001: Unattended MT5 Runtime Hosting on Windows
 
-**Status:** experiment required; no production topology approved.  
+**Status:** experiment required; no production topology approved.
 **Decision context:** the control-plane service runs in Session 0, while the
 MetaTrader5 Python package communicates with a GUI-dependent terminal. Pipeline
 #16 proved Session 0 ownership evidence, not safe direct runtime integration.
