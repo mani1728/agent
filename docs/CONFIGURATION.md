@@ -12,6 +12,14 @@ Configuration is split into a transport-neutral immutable contract and an infras
 
 v0.0.7 intentionally does not introduce YAML/TOML/JSON configuration files, registry access, remote configuration, Vault/secrets-manager integration, or production IAM configuration.
 
+## Remote configuration — Work Item #11
+
+**IMPLEMENTED foundation:** versioned candidates are policy-validated before atomic apply;
+`LOCAL_ONLY` values (including trust roots) reject remote mutation, while `WITH_LIMITS`
+values retain local bounds. A failed health check leaves the known-good revision active;
+rollback restores the prior revision. Durable remote-config storage and authenticated transport
+remain **PENDING PRODUCTION VALIDATION**.
+
 ## Logging (v0.1.2)
 
 `MT5_AGENT_LOG_LEVEL` accepts DEBUG, INFO (default), WARNING and ERROR,
