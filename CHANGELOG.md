@@ -27,6 +27,8 @@ revalidated here, so no publication dates are inferred from commit timestamps.
   manifest with fail-closed command/version and enablement validation.
 - Pure command-lifecycle, TTL/UTC expiration, cancellation/point-of-no-return and
   structured-error contracts; no execution or scheduler behavior is added.
+- SQLite durable-command-state foundation with schema versioning, WAL, unique
+  command identity and recovery queries; no outbox, cleanup or execution replay.
 
 ## [0.1.2] — Diagnostics, lifecycle logging, and dual-runner CI foundation
 
