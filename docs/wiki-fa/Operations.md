@@ -10,7 +10,7 @@ mTLS و rotation/revocation certificate، ACL deny-by-default، replay resistanc
 
 remote configuration سه قلمرو دارد: `LOCAL_ONLY` برای trust root و anchor امنیتی، `SERVER_MANAGED` برای operation و `SERVER_MANAGED_WITH_LIMITS` برای مقادیر bounded مانند chunk/retention. candidate باید authenticate/authorize/schema/policy/compatibility validate، durable stage، atomic apply، health-check و در failure rollback به last-known-good شود. config معمولی هرگز مرز local security را بازنویسی نمی‌کند.
 
-## Logging و observability
+## Logging و observability — پیاده‌سازی‌شده (بخش پایه)
 
 v0.1.3 logging lifecycle محدود دارد. هدف production: local structured JSON با timestamp/severity/agent/correlation/command/transfer/state/duration/error category، rotation/retention/max disk و support bundle redacted. server telemetry از local logs جداست.
 
@@ -20,6 +20,6 @@ heartbeat شامل version/uptime/lifecycle، MT5/transport/spool، queue age/by
 
 Agent باید بعد از boot unattended شود، اما Runner service در Session 0 است و MT5 Python IPC GUI-dependent است. experiment کنترل‌شده در Session 1 با Worker مستقیم، `initialize`، `version`، `terminal_info` و presence-only `account_info` موفق بود؛ `shutdown` API نیز terminal را نکشت. این فقط viability interactive را اثبات می‌کند، نه boot/logon/locked/disconnected session یا launcher unattended. direct service integration ادعا نمی‌شود. راه بعدی: service/control با Worker session-bound و IPC authenticated، بدون desktop-interaction hack یا kill کردن `terminal64.exe`.
 
-## Maintenance/quiesce — برنامه‌ریزی‌شده
+## Maintenance/quiesce — پیاده‌سازی‌شده (بخش پایه)
 
-RUNNING → QUIESCING → QUIESCED → RESUMING، با heartbeat/control channel حداقلی و policy صریح برای in-flight trade/transfer، timeout و restart recovery. این رفتار هنوز پیاده‌سازی نشده است.
+`NORMAL → QUIESCING → QUIESCED → RESYNC → NORMAL` به‌صورت cooperative مدل شده است؛ کنترل مسیر زنده می‌ماند و readiness تا پایان resync false است. rotation واقعی log و telemetry production همچنان برنامه‌ریزی‌شده است.
