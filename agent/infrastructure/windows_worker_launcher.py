@@ -25,6 +25,14 @@ class ControlledWorkerLauncher:
         startup=win32process.STARTUPINFO(); command=f'"{sys.executable}" "{self._entry}"'
         _,_,pid,_=win32process.CreateProcessAsUser(token,None,command,None,None,False,win32con.CREATE_NO_WINDOW,None,str(self._entry.parent),startup)
         self._owned=OwnedWorker(pid,session_id,datetime.now(timezone.utc).isoformat(),str(self._entry)); return self._owned
+    @staticmethod
+    def active_interactive_session():
+        current=[]
+        for item in win32ts.WTSEnumerateSessions(None,1,0):
+            session_id,_,state=item
+            if state==win32ts.WTSActive: current.append(session_id)
+        if len(current)!=1: raise RuntimeError('INTERACTIVE_SESSION_NOT_DETERMINISTIC')
+        return current[0]
     def owned(self): return self._owned
     def stop(self):
         if self._process is None or self._process.poll() is not None: return False
